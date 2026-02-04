@@ -1,0 +1,1202 @@
+Ôr@Ÿªassertions¤code´customTransformCache¬dependencies¢id¤meta±moduleSideEffects¬originalCode±originalSourcemap«resolvedIds®sourcemapChainµsyntheticNamedExportsµtransformDependencies®transformFiles¨cacheAstÔrAÚKimport media from '@ohos.multimedia.media';
+import audio from '@ohos.multimedia.audio';
+import fs from '@ohos.file.fs';
+import hilog from '@ohos.hilog';
+/**
+ * éŸ³é¢‘ç®¡ç†å™¨ - ç»Ÿä¸€ç®¡ç†å½•éŸ³å’Œæ’­æ”¾åŠŸèƒ½
+ * ä¿®å¤ç‰ˆï¼šè§£å†³çŠ¶æ€ç®¡ç†å’Œèµ„æºé‡Šæ”¾é—®é¢˜
+ */
+export class AudioManager {
+    constructor() {
+        this.recorder = null;
+        this.player = null;
+        this.audioCapturer = null;
+        this.isCapturing = false;
+        this.isRecording = false;
+        this.isPlaying = false;
+        this.currentAudioPath = '';
+        this.recordStartTime = 0;
+        this.playerState = 'idle';
+        this.recorderState = 'idle';
+        // æ–°å¢ï¼šé˜²æ­¢é‡å¤åˆå§‹åŒ–çš„æ ‡è®°
+        this.isRecorderInitializing = false;
+        this.isPlayerInitializing = false;
+    }
+    static getInstance() {
+        if (!AudioManager.instance) {
+            AudioManager.instance = new AudioManager();
+        }
+        return AudioManager.instance;
+    }
+    async initRecorder() {
+        // é˜²æ­¢é‡å¤åˆå§‹åŒ–
+        if (this.isRecorderInitializing) {
+            hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡');
+            return;
+        }
+        if (this.recorder && this.recorderState !== 'released') {
+            hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å·²å­˜åœ¨ä¸”å¯ç”¨');
+            return;
+        }
+        try {
+            this.isRecorderInitializing = true;
+            // å¦‚æœå­˜åœ¨æ—§å®ä¾‹ï¼Œå…ˆæ¸…ç†
+            if (this.recorder) {
+                try {
+                    await this.recorder.release();
+                }
+                catch (e) {
+                    hilog.warn(0x0000, 'AudioManager', 'é‡Šæ”¾æ—§å½•éŸ³å™¨å¤±è´¥ï¼Œç»§ç»­');
+                }
+            }
+            this.recorder = await media.createAVRecorder();
+            this.recorderState = 'idle';
+            // ç›‘å¬å½•éŸ³å™¨çŠ¶æ€å˜åŒ–
+            this.recorder.on('stateChange', (state) => {
+                hilog.info(0x0000, 'AudioManager', `å½•éŸ³å™¨çŠ¶æ€å˜åŒ–: ${state}`);
+                this.recorderState = state;
+            });
+            hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨åˆå§‹åŒ–æˆåŠŸ');
+        }
+        catch (error) {
+            const e = error;
+            const errorMsg = `å½•éŸ³å™¨åˆå§‹åŒ–å¤±è´¥: ${e.message}`;
+            hilog.error(0x0000, 'AudioManager', errorMsg);
+            this.onErrorCallback?.(errorMsg);
+            throw new Error(errorMsg);
+        }
+        finally {
+            this.isRecorderInitializing = false;
+        }
+    }
+    async initPlayer() {
+        // é˜²æ­¢é‡å¤åˆå§‹åŒ–
+        if (this.isPlayerInitializing) {
+            hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡');
+            return;
+        }
+        // å¦‚æœæ’­æ”¾å™¨å­˜åœ¨ä¸”æœªè¢«é‡Šæ”¾ï¼Œç›´æ¥è¿”å›
+        if (this.player && this.playerState !== 'released') {
+            hilog.info(0x0000, 'AudioManager', `æ’­æ”¾å™¨å·²å­˜åœ¨ï¼Œå½“å‰çŠ¶æ€: ${this.playerState}`);
+            return;
+        }
+        try {
+            this.isPlayerInitializing = true;
+            // å¦‚æœå­˜åœ¨æ—§å®ä¾‹ï¼Œå…ˆæ¸…ç†
+            if (this.player) {
+                try {
+                    await this.player.release();
+                }
+                catch (e) {
+                    hilog.warn(0x0000, 'AudioManager', 'é‡Šæ”¾æ—§æ’­æ”¾å™¨å¤±è´¥ï¼Œç»§ç»­');
+                }
+            }
+            this.player = await media.createAVPlayer();
+            this.playerState = 'idle';
+            this.player.on('stateChange', (state) => {
+                hilog.info(0x0000, 'AudioManager', `æ’­æ”¾å™¨çŠ¶æ€å˜åŒ–: ${state}`);
+                this.playerState = state;
+                if (state === 'completed' || state === 'stopped') {
+                    this.isPlaying = false;
+                    this.onPlayCompleteCallback?.();
+                }
+                else if (state === 'playing') {
+                    this.isPlaying = true;
+                    this.onPlayStartCallback?.();
+                }
+            });
+            this.player.on('error', (err) => {
+                const e = err;
+                this.isPlaying = false;
+                hilog.error(0x0000, 'AudioManager', `æ’­æ”¾é”™è¯¯: ${e.message}`);
+                this.onErrorCallback?.('æ’­æ”¾å¤±è´¥: ' + e.message);
+            });
+            hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨åˆå§‹åŒ–æˆåŠŸ');
+        }
+        catch (error) {
+            const e = error;
+            const errorMsg = `æ’­æ”¾å™¨åˆå§‹åŒ–å¤±è´¥: ${e.message}`;
+            hilog.error(0x0000, 'AudioManager', errorMsg);
+            this.onErrorCallback?.(errorMsg);
+            throw new Error(errorMsg);
+        }
+        finally {
+            this.isPlayerInitializing = false;
+        }
+    }
+    async initCapturer() {
+        if (this.audioCapturer) {
+            hilog.info(0x0000, 'AudioManager', 'AudioCapturer å·²å­˜åœ¨');
+            return;
+        }
+        try {
+            const audioStreamInfo = {
+                samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000,
+                channels: audio.AudioChannel.CHANNEL_1,
+                sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+                encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+            };
+            const audioCapturerInfo = {
+                source: audio.SourceType.SOURCE_TYPE_MIC,
+                capturerFlags: 0
+            };
+            const capturerOptions = {
+                streamInfo: audioStreamInfo,
+                capturerInfo: audioCapturerInfo
+            };
+            this.audioCapturer = await audio.createAudioCapturer(capturerOptions);
+            hilog.info(0x0000, 'AudioManager', 'AudioCapturer åˆå§‹åŒ–æˆåŠŸ');
+        }
+        catch (error) {
+            const e = error;
+            const errorMsg = `AudioCapturer åˆå§‹åŒ–å¤±è´¥: ${e.message}`;
+            hilog.error(0x0000, 'AudioManager', errorMsg);
+            this.onErrorCallback?.(errorMsg);
+            throw new Error(errorMsg);
+        }
+    }
+    async startRecording(audioPath, config) {
+        if (this.isRecording) {
+            hilog.warn(0x0000, 'AudioManager', 'å·²ç»åœ¨å½•éŸ³ä¸­');
+            return;
+        }
+        try {
+            // 1. ç¡®ä¿å½•éŸ³å™¨å·²åˆå§‹åŒ–
+            await this.initRecorder();
+            // 2. æ£€æŸ¥å½•éŸ³å™¨çŠ¶æ€ï¼Œå¦‚æœä¸æ˜¯ idleï¼Œå…ˆé‡ç½®
+            if (this.recorderState !== 'idle') {
+                hilog.info(0x0000, 'AudioManager', `å½•éŸ³å™¨çŠ¶æ€ä¸º ${this.recorderState}ï¼Œæ­£åœ¨é‡ç½®...`);
+                await this.recorder.reset();
+                await this.waitForRecorderState('idle', 2000);
+            }
+            // 3. æ‰“å¼€æ–‡ä»¶
+            const file = await fs.open(audioPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+            // 4. é…ç½®å½•éŸ³å‚æ•°
+            const defaultConfig = {
+                audioSourceType: media.AudioSourceType.AUDIO_SOURCE_TYPE_MIC,
+                profile: {
+                    audioBitrate: config?.bitrate || 32000,
+                    audioChannels: config?.channels || 1,
+                    audioCodec: media.CodecMimeType.AUDIO_AAC,
+                    audioSampleRate: config?.sampleRate || 16000,
+                    fileFormat: media.ContainerFormatType.CFT_MPEG_4A
+                },
+                url: `fd://${file.fd}`
+            };
+            // 5. å‡†å¤‡å¹¶å¯åŠ¨å½•éŸ³å™¨
+            await this.recorder.prepare(defaultConfig);
+            await this.waitForRecorderState('prepared', 2000);
+            await this.recorder.start();
+            hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å¯åŠ¨æˆåŠŸ');
+            // 6. å¯åŠ¨éŸ³é¢‘é‡‡é›†å™¨
+            await this.initCapturer();
+            if (this.audioCapturer) {
+                await this.audioCapturer.start();
+                this.isCapturing = true;
+                this.readPcmDataLoop();
+                hilog.info(0x0000, 'AudioManager', 'PCMé‡‡é›†å™¨å¯åŠ¨æˆåŠŸ');
+            }
+            // 7. æ›´æ–°çŠ¶æ€å¹¶è§¦å‘å›è°ƒ
+            this.isRecording = true;
+            this.currentAudioPath = audioPath;
+            this.recordStartTime = Date.now();
+            this.onRecordStartCallback?.();
+        }
+        catch (error) {
+            const e = error;
+            const errorMsg = `å¼€å§‹å½•éŸ³å¤±è´¥: ${e.message}`;
+            hilog.error(0x0000, 'AudioManager', errorMsg);
+            this.isRecording = false;
+            this.onErrorCallback?.(errorMsg);
+            throw new Error(errorMsg);
+        }
+    }
+    async stopRecording() {
+        if (!this.isRecording) {
+            hilog.warn(0x0000, 'AudioManager', 'å½“å‰æ²¡æœ‰åœ¨å½•éŸ³');
+            return { success: false, audioPath: '', duration: 0 };
+        }
+        if (!this.recorder) {
+            hilog.error(0x0000, 'AudioManager', 'å½•éŸ³å™¨ä¸å­˜åœ¨');
+            return { success: false, audioPath: '', duration: 0 };
+        }
+        // è®¡ç®—æ—¶é•¿ï¼ˆæå‰è®¡ç®—ï¼Œé¿å…åç»­å‡ºé”™æ— æ³•è·å–ï¼‰
+        const duration = Math.floor((Date.now() - this.recordStartTime) / 1000);
+        const audioPath = this.currentAudioPath;
+        try {
+            // 1. å…ˆåœæ­¢éŸ³é¢‘é‡‡é›†å™¨
+            this.isCapturing = false;
+            if (this.audioCapturer) {
+                try {
+                    await this.audioCapturer.stop();
+                    await this.audioCapturer.release();
+                    this.audioCapturer = null;
+                    hilog.info(0x0000, 'AudioManager', 'PCMé‡‡é›†å™¨å·²åœæ­¢');
+                }
+                catch (e) {
+                    hilog.warn(0x0000, 'AudioManager', 'PCMé‡‡é›†å™¨åœæ­¢å¤±è´¥ï¼Œç»§ç»­');
+                }
+            }
+            // 2. æ£€æŸ¥å½•éŸ³å™¨çŠ¶æ€
+            if (this.recorderState === 'idle' || this.recorderState === 'released') {
+                hilog.warn(0x0000, 'AudioManager', `å½•éŸ³å™¨çŠ¶æ€å¼‚å¸¸: ${this.recorderState}ï¼Œè·³è¿‡åœæ­¢æ“ä½œ`);
+                this.isRecording = false;
+                this.onRecordStopCallback?.(duration);
+                return { success: true, audioPath: audioPath, duration: duration };
+            }
+            // 3. åªæœ‰åœ¨ started çŠ¶æ€æ‰åœæ­¢å½•éŸ³å™¨
+            if (this.recorderState === 'started') {
+                try {
+                    await this.recorder.stop();
+                    hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å·²åœæ­¢');
+                }
+                catch (e) {
+                    hilog.warn(0x0000, 'AudioManager', 'å½•éŸ³å™¨åœæ­¢å¤±è´¥ï¼Œå°è¯•é‡ç½®');
+                }
+            }
+            // 4. é‡ç½®å½•éŸ³å™¨ï¼ˆæ— è®ºåœæ­¢æ˜¯å¦æˆåŠŸï¼‰
+            try {
+                await this.recorder.reset();
+                hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å·²é‡ç½®');
+            }
+            catch (e) {
+                hilog.warn(0x0000, 'AudioManager', 'å½•éŸ³å™¨é‡ç½®å¤±è´¥');
+            }
+            // 5. æ›´æ–°çŠ¶æ€å¹¶è§¦å‘å›è°ƒ
+            this.isRecording = false;
+            this.onRecordStopCallback?.(duration);
+            return { success: true, audioPath: audioPath, duration: duration };
+        }
+        catch (error) {
+            const e = error;
+            const errorMsg = `åœæ­¢å½•éŸ³å¤±è´¥: ${e.message}`;
+            hilog.error(0x0000, 'AudioManager', errorMsg);
+            this.isRecording = false;
+            // å³ä½¿å‡ºé”™ä¹Ÿè§¦å‘å›è°ƒï¼Œè®©ç”¨æˆ·çŸ¥é“å½•éŸ³å·²ç»“æŸ
+            this.onRecordStopCallback?.(duration);
+            return { success: true, audioPath: audioPath, duration: duration };
+        }
+    }
+    async readPcmDataLoop() {
+        if (!this.audioCapturer)
+            return;
+        try {
+            const bufferSize = await this.audioCapturer.getBufferSize();
+            while (this.isCapturing) {
+                try {
+                    const buffer = await this.audioCapturer.read(bufferSize, true);
+                    this.onPcmDataCallback?.(buffer);
+                }
+                catch (error) {
+                    hilog.error(0x0000, 'AudioManager', 'è¯»å–PCMæ•°æ®å¤±è´¥');
+                    break;
+                }
+            }
+        }
+        catch (error) {
+            hilog.error(0x0000, 'AudioManager', 'è·å–ç¼“å†²åŒºå¤§å°å¤±è´¥');
+            this.isCapturing = false;
+        }
+    }
+    async play(audioPath) {
+        let fileHandle = null;
+        try {
+            // 1. åœæ­¢å½“å‰æ’­æ”¾
+            if (this.isPlaying) {
+                await this.stop();
+                await this.delay(300);
+            }
+            // 2. ç¡®ä¿æ’­æ”¾å™¨å·²åˆå§‹åŒ–
+            await this.initPlayer();
+            // 3. æ£€æŸ¥æ–‡ä»¶æ˜¯å¦å­˜åœ¨
+            try {
+                await fs.access(audioPath);
+                hilog.info(0x0000, 'AudioManager', `æ–‡ä»¶å­˜åœ¨: ${audioPath}`);
+            }
+            catch (e) {
+                throw new Error('éŸ³é¢‘æ–‡ä»¶ä¸å­˜åœ¨');
+            }
+            // 4. æ ¹æ®å½“å‰çŠ¶æ€å¤„ç†æ’­æ”¾å™¨
+            hilog.info(0x0000, 'AudioManager', `å‡†å¤‡æ’­æ”¾ï¼Œå½“å‰çŠ¶æ€: ${this.playerState}`);
+            if (this.playerState === 'released' || !this.player) {
+                hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨å·²é‡Šæ”¾ï¼Œé‡æ–°åˆå§‹åŒ–...');
+                await this.initPlayer();
+            }
+            else if (this.playerState !== 'idle') {
+                hilog.info(0x0000, 'AudioManager', `å½“å‰çŠ¶æ€ ${this.playerState}ï¼Œæ­£åœ¨é‡ç½®...`);
+                await this.player.reset();
+                await this.waitForPlayerState('idle', 3000);
+            }
+            // *** å…³é”®ä¿®å¤ï¼šä½¿ç”¨æ–‡ä»¶æè¿°ç¬¦æ ¼å¼ ***
+            // 5. æ‰“å¼€æ–‡ä»¶è·å–æ–‡ä»¶æè¿°ç¬¦
+            fileHandle = await fs.open(audioPath, fs.OpenMode.READ_ONLY);
+            // 6. è·å–æ–‡ä»¶ä¿¡æ¯ï¼ˆç”¨äº AVFileDescriptorï¼‰
+            const stat = await fs.stat(audioPath);
+            // 7. æ„é€  AVFileDescriptor å¯¹è±¡
+            const avFileDescriptor = {
+                fd: fileHandle.fd,
+                offset: 0,
+                length: stat.size
+            };
+            hilog.info(0x0000, 'AudioManager', `ä½¿ç”¨æ–‡ä»¶æè¿°ç¬¦æ’­æ”¾: fd=${fileHandle.fd}, size=${stat.size}`);
+            // 8. è®¾ç½®éŸ³é¢‘æºï¼ˆä½¿ç”¨ AVFileDescriptorï¼‰
+            this.player.fdSrc = avFileDescriptor;
+            // 9. ç­‰å¾…è‡ªåŠ¨è¿›å…¥ initialized çŠ¶æ€
+            await this.waitForPlayerState('initialized', 3000);
+            // 10. å‡†å¤‡æ’­æ”¾
+            await this.player.prepare();
+            hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨å‡†å¤‡ä¸­...');
+            // 11. ç­‰å¾…è¿›å…¥ prepared çŠ¶æ€
+            await this.waitForPlayerState('prepared', 3000);
+            // 12. å¼€å§‹æ’­æ”¾
+            await this.player.play();
+            this.currentAudioPath = audioPath;
+            hilog.info(0x0000, 'AudioManager', 'å¼€å§‹æ’­æ”¾');
+            // æ³¨æ„ï¼šä¸è¦åœ¨è¿™é‡Œå…³é—­æ–‡ä»¶ï¼Œæ’­æ”¾å®Œæˆåå†å…³é—­
+        }
+        catch (error) {
+            // å¦‚æœå‡ºé”™ï¼Œå…³é—­æ–‡ä»¶å¥æŸ„
+            if (fileHandle) {
+                try {
+                    fs.closeSync(fileHandle.fd);
+                }
+                catch (e) {
+                    hilog.warn(0x0000, 'AudioManager', 'å…³é—­æ–‡ä»¶å¤±è´¥');
+                }
+            }
+            const e = error;
+            const errorMsg = `æ’­æ”¾å¤±è´¥: ${e.message}`;
+            hilog.error(0x0000, 'AudioManager', errorMsg);
+            this.onErrorCallback?.(errorMsg);
+            throw new Error(errorMsg);
+        }
+    }
+    async waitForPlayerState(targetState, timeout = 3000) {
+        return new Promise((resolve, reject) => {
+            if (this.playerState === targetState) {
+                resolve();
+                return;
+            }
+            const startTime = Date.now();
+            const checkInterval = setInterval(() => {
+                if (this.playerState === targetState) {
+                    clearInterval(checkInterval);
+                    resolve();
+                }
+                else if (Date.now() - startTime > timeout) {
+                    clearInterval(checkInterval);
+                    reject(new Error(`ç­‰å¾…æ’­æ”¾å™¨çŠ¶æ€ ${targetState} è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: ${this.playerState}`));
+                }
+            }, 100);
+        });
+    }
+    async waitForRecorderState(targetState, timeout = 3000) {
+        return new Promise((resolve, reject) => {
+            if (this.recorderState === targetState) {
+                resolve();
+                return;
+            }
+            const startTime = Date.now();
+            const checkInterval = setInterval(() => {
+                if (this.recorderState === targetState) {
+                    clearInterval(checkInterval);
+                    resolve();
+                }
+                else if (Date.now() - startTime > timeout) {
+                    clearInterval(checkInterval);
+                    reject(new Error(`ç­‰å¾…å½•éŸ³å™¨çŠ¶æ€ ${targetState} è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: ${this.recorderState}`));
+                }
+            }, 100);
+        });
+    }
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    async stop() {
+        if (!this.isPlaying || !this.player) {
+            hilog.info(0x0000, 'AudioManager', 'å½“å‰æ²¡æœ‰åœ¨æ’­æ”¾');
+            return;
+        }
+        try {
+            await this.player.stop();
+            hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å·²åœæ­¢');
+        }
+        catch (error) {
+            const e = error;
+            hilog.error(0x0000, 'AudioManager', `åœæ­¢æ’­æ”¾å¤±è´¥: ${e.message}`);
+            throw new Error(e.message);
+        }
+    }
+    setCallbacks(callbacks) {
+        this.onRecordStartCallback = callbacks.onRecordStart;
+        this.onRecordStopCallback = callbacks.onRecordStop;
+        this.onPlayStartCallback = callbacks.onPlayStart;
+        this.onPlayCompleteCallback = callbacks.onPlayComplete;
+        this.onErrorCallback = callbacks.onError;
+        this.onPcmDataCallback = callbacks.onPcmData;
+    }
+    // æ–°å¢ï¼šæ¸…ç†æ‰€æœ‰èµ„æºçš„æ–¹æ³•
+    async cleanup() {
+        try {
+            if (this.audioCapturer) {
+                await this.audioCapturer.release();
+                this.audioCapturer = null;
+            }
+            if (this.recorder) {
+                await this.recorder.release();
+                this.recorder = null;
+            }
+            if (this.player) {
+                await this.player.release();
+                this.player = null;
+            }
+            hilog.info(0x0000, 'AudioManager', 'æ‰€æœ‰éŸ³é¢‘èµ„æºå·²æ¸…ç†');
+        }
+        catch (error) {
+            hilog.error(0x0000, 'AudioManager', 'æ¸…ç†èµ„æºå¤±è´¥');
+        }
+    }
+}
+//# sourceMappingURL=AudioManager.js.mapÂ”Ùb hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.media.d.tsÙb hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.audio.d.tsÙY hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.file.fs.d.tsÙW hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsÙKE:\Huawei\VoiceDiary_back1-back\entry\src\main\ets\manager\AudioManager.etsÔrBœªmoduleName±isLocalDependency¯isNodeEntryFile§pkgPath±belongProjectPath§pkgNameªpkgVersion±dependencyPkgInfo¯hostModulesInfo°belongModulePath§checker¬shouldEmitJs¥entryÃÂÙ%E:\Huawei\VoiceDiary_back1-back\entry¿E:\Huawei\VoiceDiary_back1-back¥entry¥1.0.0Ô  ‘ÔrC’²hostDependencyName®hostModuleName·../manager/AudioManager¥entryÙ%E:\Huawei\VoiceDiary_back1-back\entryÔrDÜ ®¬getNodeCount²getIdentifierCount®getSymbolCount¬getTypeCountµgetInstantiationCountµgetRelationCacheSizes±isUndefinedSymbol±isArgumentsSymbol¯isUnknownSymbol¯getMergedSymbol®getDiagnostics´getGlobalDiagnostics´getRecursionIdentity¶getUnmatchedProperties¹getTypeOfSymbolAtLocation¯getTypeOfSymbolÙ(getSymbolsOfParameterPropertyDeclaration·getDeclaredTypeOfSymbol³getPropertiesOfType±getPropertyOfTypeÙ"getPrivateIdentifierPropertyOfType·getTypeOfPropertyOfType²getIndexInfoOfType³getIndexInfosOfTypeºgetIndexInfosOfIndexSymbol³getSignaturesOfType²getIndexTypeOfType¬getIndexType¬getBaseTypes¸getBaseTypeOfLiteralType®getWidenedType³getTypeFromTypeNode°getParameterTypeÙ$getParameterIdentifierNameAtPosition¸getPromisedTypeOfPromise®getAwaitedType¸getReturnTypeOfSignature®isNullableType¯getNullableType²getNonNullableType²getNonOptionalType°getTypeArguments®typeToTypeNodeÙ$indexInfoToIndexSignatureDeclaration¿signatureToSignatureDeclaration²symbolToEntityName²symbolToExpression¬symbolToNodeÙ!symbolToTypeParameterDeclarations¼symbolToParameterDeclarationºtypeParameterToDeclaration±getSymbolsInScope³getSymbolAtLocation·getIndexInfosAtLocationÙ!getShorthandAssignmentValueSymbolÙ#getExportSpecifierLocalTargetSymbol·getExportSymbolOfSymbol±getTypeAtLocationÙ tryGetTypeAtLocationWithoutCheckºgetTypeOfAssignmentPatternÙ*getPropertySymbolOfDestructuringAssignment±signatureToString¬typeToString®symbolToStringµtypePredicateToString®writeSignature©writeType«writeSymbol²writeTypePredicate¼getAugmentedPropertiesOfType®getRootSymbols²getSymbolOfExpando±getContextualTypeÙ(getContextualTypeForObjectLiteralElementÙ#getContextualTypeForArgumentAtIndexÙ getContextualTypeForJsxAttribute²isContextSensitiveÙ!getTypeOfPropertyOfContextualTypeµgetFullyQualifiedNameÙ#tryGetResolvedSignatureWithoutCheck´getResolvedSignatureÙ/getResolvedSignatureForStringLiteralCompletionsÙ$getResolvedSignatureForSignatureHelpµgetExpandedParameters¹hasEffectiveRestParameterºcontainsArgumentsReference°getConstantValueµisValidPropertyAccessÙ#isValidPropertyAccessForCompletions»getSignatureFromDeclarationºisImplementationOfOverload¹getImmediateAliasedSymbol°getAliasedSymbol¯getEmitResolver²getExportsOfModule¿getExportsAndPropertiesOfModuleÙ forEachExportAndPropertyOfModule¯getSymbolWalker±getAmbientModules¹getJsxIntrinsicTagNamesAt³isOptionalParameter»tryGetMemberInModuleExportsÙ(tryGetMemberInModuleExportsAndProperties´tryFindAmbientModuleÙ(tryFindAmbientModuleWithoutAugmentations¯getApparentType¬getUnionType²isTypeAssignableTo³createAnonymousType¯createSignature¬createSymbol¯createIndexInfoªgetAnyType­getStringType­getNumberType±createPromiseType¯createArrayType¹getElementTypeOfArrayType®getBooleanType¬getFalseType«getTrueType«getVoidType°getUndefinedType«getNullType¯getESSymbolType¬getNeverType¯getOptionalType®getPromiseType²getPromiseLikeType´getAsyncIterableType²isSymbolAccessible«isArrayType«isTupleType¯isArrayLikeTypeÙ#isTypeInvalidDueToUnionDiscriminantºgetExactOptionalProperties¿getAllPossiblePropertiesOfTypesÙ(getSuggestedSymbolForNonexistentPropertyÙ#getSuggestionForNonexistentPropertyÙ,getSuggestedSymbolForNonexistentJSXAttributeÙ&getSuggestedSymbolForNonexistentSymbolÙ!getSuggestionForNonexistentSymbolÙ&getSuggestedSymbolForNonexistentModuleÙ!getSuggestionForNonexistentExportÙ+getSuggestedSymbolForNonexistentClassMember·getBaseConstraintOfType»getDefaultFromTypeParameter«resolveName¯getJsxNamespaceµgetJsxFragmentFactory¸getAccessibleSymbolChain»getTypePredicateOfSignature¹resolveExternalModuleName»resolveExternalModuleSymbol°tryGetThisTypeAt¹getTypeArgumentConstraint¸getSuggestionDiagnostics¸runWithCancellationTokenÙ3getLocalTypeParametersOfClassOrInterfaceOrTypeAlias´isDeclarationVisible´isPropertyAccessible»getTypeOnlyAliasDeclaration¿getMemberOverrideModifierStatusÙ!isTypeParameterPossiblyReferenced²getConstEnumRelate´clearConstEnumRelateµdeleteConstEnumRelateÙ$getTypeArgumentsForResolvedSignatureµgetCheckedSourceFilesÙ"collectHaveTsNoCheckFilesForLinter·clearQualifiedNameCache®isStaticRecord²isStaticSourceFile³createIntrinsicTypeÔ  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  Ô  ÃÃÚE import media from '@ohos.multimedia.media';
+import audio from '@ohos.multimedia.audio';
+import fs from '@ohos.file.fs';
+import hilog from '@ohos.hilog';
+import { BusinessError } from '@ohos.base';
+import { textProcessing } from '@kit.NaturalLanguageKit';
+
+/**
+ * éŸ³é¢‘ç®¡ç†å™¨ - ç»Ÿä¸€ç®¡ç†å½•éŸ³å’Œæ’­æ”¾åŠŸèƒ½
+ * ä¿®å¤ç‰ˆï¼šè§£å†³çŠ¶æ€ç®¡ç†å’Œèµ„æºé‡Šæ”¾é—®é¢˜
+ */
+export class AudioManager {
+  private static instance: AudioManager;
+  private recorder: media.AVRecorder | null = null;
+  private player: media.AVPlayer | null = null;
+  private audioCapturer: audio.AudioCapturer | null = null;
+  private isCapturing: boolean = false;
+
+  private isRecording: boolean = false;
+  private isPlaying: boolean = false;
+  private currentAudioPath: string = '';
+  private recordStartTime: number = 0;
+
+  private playerState: media.AVPlayerState = 'idle';
+  private recorderState: media.AVRecorderState = 'idle';
+
+  // æ–°å¢ï¼šé˜²æ­¢é‡å¤åˆå§‹åŒ–çš„æ ‡è®°
+  private isRecorderInitializing: boolean = false;
+  private isPlayerInitializing: boolean = false;
+
+  private onPcmDataCallback?: (data: ArrayBuffer) => void;
+  private onRecordStartCallback?: () => void;
+  private onRecordStopCallback?: (duration: number) => void;
+  private onPlayStartCallback?: () => void;
+  private onPlayCompleteCallback?: () => void;
+  private onErrorCallback?: (error: string) => void;
+
+  private constructor() {}
+
+  static getInstance(): AudioManager {
+    if (!AudioManager.instance) {
+      AudioManager.instance = new AudioManager();
+    }
+    return AudioManager.instance;
+  }
+
+  async initRecorder(): Promise<void> {
+    // é˜²æ­¢é‡å¤åˆå§‹åŒ–
+    if (this.isRecorderInitializing) {
+      hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡');
+      return;
+    }
+
+    if (this.recorder && this.recorderState !== 'released') {
+      hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å·²å­˜åœ¨ä¸”å¯ç”¨');
+      return;
+    }
+
+    try {
+      this.isRecorderInitializing = true;
+
+      // å¦‚æœå­˜åœ¨æ—§å®ä¾‹ï¼Œå…ˆæ¸…ç†
+      if (this.recorder) {
+        try {
+          await this.recorder.release();
+        } catch (e) {
+          hilog.warn(0x0000, 'AudioManager', 'é‡Šæ”¾æ—§å½•éŸ³å™¨å¤±è´¥ï¼Œç»§ç»­');
+        }
+      }
+
+      this.recorder = await media.createAVRecorder();
+      this.recorderState = 'idle';
+
+      // ç›‘å¬å½•éŸ³å™¨çŠ¶æ€å˜åŒ–
+      this.recorder.on('stateChange', (state: media.AVRecorderState) => {
+        hilog.info(0x0000, 'AudioManager', `å½•éŸ³å™¨çŠ¶æ€å˜åŒ–: ${state}`);
+        this.recorderState = state;
+      });
+
+      hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨åˆå§‹åŒ–æˆåŠŸ');
+    } catch (error) {
+      const e = error as BusinessError;
+      const errorMsg = `å½•éŸ³å™¨åˆå§‹åŒ–å¤±è´¥: ${e.message}`;
+      hilog.error(0x0000, 'AudioManager', errorMsg);
+      this.onErrorCallback?.(errorMsg);
+      throw new Error(errorMsg);
+    } finally {
+      this.isRecorderInitializing = false;
+    }
+  }
+
+  async initPlayer(): Promise<void> {
+    // é˜²æ­¢é‡å¤åˆå§‹åŒ–
+    if (this.isPlayerInitializing) {
+      hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡');
+      return;
+    }
+
+    // å¦‚æœæ’­æ”¾å™¨å­˜åœ¨ä¸”æœªè¢«é‡Šæ”¾ï¼Œç›´æ¥è¿”å›
+    if (this.player && this.playerState !== 'released') {
+      hilog.info(0x0000, 'AudioManager', `æ’­æ”¾å™¨å·²å­˜åœ¨ï¼Œå½“å‰çŠ¶æ€: ${this.playerState}`);
+      return;
+    }
+
+    try {
+      this.isPlayerInitializing = true;
+
+      // å¦‚æœå­˜åœ¨æ—§å®ä¾‹ï¼Œå…ˆæ¸…ç†
+      if (this.player) {
+        try {
+          await this.player.release();
+        } catch (e) {
+          hilog.warn(0x0000, 'AudioManager', 'é‡Šæ”¾æ—§æ’­æ”¾å™¨å¤±è´¥ï¼Œç»§ç»­');
+        }
+      }
+
+      this.player = await media.createAVPlayer();
+      this.playerState = 'idle';
+
+      this.player.on('stateChange', (state: media.AVPlayerState) => {
+        hilog.info(0x0000, 'AudioManager', `æ’­æ”¾å™¨çŠ¶æ€å˜åŒ–: ${state}`);
+        this.playerState = state;
+
+        if (state === 'completed' || state === 'stopped') {
+          this.isPlaying = false;
+          this.onPlayCompleteCallback?.();
+        } else if (state === 'playing') {
+          this.isPlaying = true;
+          this.onPlayStartCallback?.();
+        }
+      });
+
+      this.player.on('error', (err) => {
+        const e = err as Error;
+        this.isPlaying = false;
+        hilog.error(0x0000, 'AudioManager', `æ’­æ”¾é”™è¯¯: ${e.message}`);
+        this.onErrorCallback?.('æ’­æ”¾å¤±è´¥: ' + e.message);
+      });
+
+      hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨åˆå§‹åŒ–æˆåŠŸ');
+    } catch (error) {
+      const e = error as BusinessError;
+      const errorMsg = `æ’­æ”¾å™¨åˆå§‹åŒ–å¤±è´¥: ${e.message}`;
+      hilog.error(0x0000, 'AudioManager', errorMsg);
+      this.onErrorCallback?.(errorMsg);
+      throw new Error(errorMsg);
+    } finally {
+      this.isPlayerInitializing = false;
+    }
+  }
+
+  async initCapturer(): Promise<void> {
+    if (this.audioCapturer) {
+      hilog.info(0x0000, 'AudioManager', 'AudioCapturer å·²å­˜åœ¨');
+      return;
+    }
+
+    try {
+      const audioStreamInfo: audio.AudioStreamInfo = {
+        samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000,
+        channels: audio.AudioChannel.CHANNEL_1,
+        sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+        encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+      };
+      const audioCapturerInfo: audio.AudioCapturerInfo = {
+        source: audio.SourceType.SOURCE_TYPE_MIC,
+        capturerFlags: 0
+      };
+
+      const capturerOptions: audio.AudioCapturerOptions = {
+        streamInfo: audioStreamInfo,
+        capturerInfo: audioCapturerInfo
+      }
+      this.audioCapturer = await audio.createAudioCapturer(capturerOptions);
+
+      hilog.info(0x0000, 'AudioManager', 'AudioCapturer åˆå§‹åŒ–æˆåŠŸ');
+    } catch (error) {
+      const e = error as BusinessError;
+      const errorMsg = `AudioCapturer åˆå§‹åŒ–å¤±è´¥: ${e.message}`;
+      hilog.error(0x0000, 'AudioManager', errorMsg);
+      this.onErrorCallback?.(errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+
+  async startRecording(audioPath: string, config?: RecordConfig): Promise<void> {
+    if (this.isRecording) {
+      hilog.warn(0x0000, 'AudioManager', 'å·²ç»åœ¨å½•éŸ³ä¸­');
+      return;
+    }
+
+    try {
+      // 1. ç¡®ä¿å½•éŸ³å™¨å·²åˆå§‹åŒ–
+      await this.initRecorder();
+
+      // 2. æ£€æŸ¥å½•éŸ³å™¨çŠ¶æ€ï¼Œå¦‚æœä¸æ˜¯ idleï¼Œå…ˆé‡ç½®
+      if (this.recorderState !== 'idle') {
+        hilog.info(0x0000, 'AudioManager', `å½•éŸ³å™¨çŠ¶æ€ä¸º ${this.recorderState}ï¼Œæ­£åœ¨é‡ç½®...`);
+        await this.recorder!.reset();
+        await this.waitForRecorderState('idle', 2000);
+      }
+
+      // 3. æ‰“å¼€æ–‡ä»¶
+      const file = await fs.open(audioPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
+
+      // 4. é…ç½®å½•éŸ³å‚æ•°
+      const defaultConfig: media.AVRecorderConfig = {
+        audioSourceType: media.AudioSourceType.AUDIO_SOURCE_TYPE_MIC,
+        profile: {
+          audioBitrate: config?.bitrate || 32000,
+          audioChannels: config?.channels || 1,
+          audioCodec: media.CodecMimeType.AUDIO_AAC,
+          audioSampleRate: config?.sampleRate || 16000,
+          fileFormat: media.ContainerFormatType.CFT_MPEG_4A
+        },
+        url: `fd://${file.fd}`
+      };
+
+      // 5. å‡†å¤‡å¹¶å¯åŠ¨å½•éŸ³å™¨
+      await this.recorder!.prepare(defaultConfig);
+      await this.waitForRecorderState('prepared', 2000);
+
+      await this.recorder!.start();
+      hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å¯åŠ¨æˆåŠŸ');
+
+      // 6. å¯åŠ¨éŸ³é¢‘é‡‡é›†å™¨
+      await this.initCapturer();
+      if (this.audioCapturer) {
+        await this.audioCapturer.start();
+        this.isCapturing = true;
+        this.readPcmDataLoop();
+        hilog.info(0x0000, 'AudioManager', 'PCMé‡‡é›†å™¨å¯åŠ¨æˆåŠŸ');
+      }
+
+      // 7. æ›´æ–°çŠ¶æ€å¹¶è§¦å‘å›è°ƒ
+      this.isRecording = true;
+      this.currentAudioPath = audioPath;
+      this.recordStartTime = Date.now();
+      this.onRecordStartCallback?.();
+
+    } catch (error) {
+      const e = error as BusinessError;
+      const errorMsg = `å¼€å§‹å½•éŸ³å¤±è´¥: ${e.message}`;
+      hilog.error(0x0000, 'AudioManager', errorMsg);
+      this.isRecording = false;
+      this.onErrorCallback?.(errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+
+  async stopRecording(): Promise<RecordResult> {
+    if (!this.isRecording) {
+      hilog.warn(0x0000, 'AudioManager', 'å½“å‰æ²¡æœ‰åœ¨å½•éŸ³');
+      return { success: false, audioPath: '', duration: 0 };
+    }
+
+    if (!this.recorder) {
+      hilog.error(0x0000, 'AudioManager', 'å½•éŸ³å™¨ä¸å­˜åœ¨');
+      return { success: false, audioPath: '', duration: 0 };
+    }
+
+    // è®¡ç®—æ—¶é•¿ï¼ˆæå‰è®¡ç®—ï¼Œé¿å…åç»­å‡ºé”™æ— æ³•è·å–ï¼‰
+    const duration = Math.floor((Date.now() - this.recordStartTime) / 1000);
+    const audioPath = this.currentAudioPath;
+
+    try {
+      // 1. å…ˆåœæ­¢éŸ³é¢‘é‡‡é›†å™¨
+      this.isCapturing = false;
+      if (this.audioCapturer) {
+        try {
+          await this.audioCapturer.stop();
+          await this.audioCapturer.release();
+          this.audioCapturer = null;
+          hilog.info(0x0000, 'AudioManager', 'PCMé‡‡é›†å™¨å·²åœæ­¢');
+        } catch (e) {
+          hilog.warn(0x0000, 'AudioManager', 'PCMé‡‡é›†å™¨åœæ­¢å¤±è´¥ï¼Œç»§ç»­');
+        }
+      }
+
+      // 2. æ£€æŸ¥å½•éŸ³å™¨çŠ¶æ€
+      if (this.recorderState === 'idle' || this.recorderState === 'released') {
+        hilog.warn(0x0000, 'AudioManager', `å½•éŸ³å™¨çŠ¶æ€å¼‚å¸¸: ${this.recorderState}ï¼Œè·³è¿‡åœæ­¢æ“ä½œ`);
+        this.isRecording = false;
+        this.onRecordStopCallback?.(duration);
+        return { success: true, audioPath: audioPath, duration: duration };
+      }
+
+      // 3. åªæœ‰åœ¨ started çŠ¶æ€æ‰åœæ­¢å½•éŸ³å™¨
+      if (this.recorderState === 'started') {
+        try {
+          await this.recorder.stop();
+          hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å·²åœæ­¢');
+        } catch (e) {
+          hilog.warn(0x0000, 'AudioManager', 'å½•éŸ³å™¨åœæ­¢å¤±è´¥ï¼Œå°è¯•é‡ç½®');
+        }
+      }
+
+      // 4. é‡ç½®å½•éŸ³å™¨ï¼ˆæ— è®ºåœæ­¢æ˜¯å¦æˆåŠŸï¼‰
+      try {
+        await this.recorder.reset();
+        hilog.info(0x0000, 'AudioManager', 'å½•éŸ³å™¨å·²é‡ç½®');
+      } catch (e) {
+        hilog.warn(0x0000, 'AudioManager', 'å½•éŸ³å™¨é‡ç½®å¤±è´¥');
+      }
+
+      // 5. æ›´æ–°çŠ¶æ€å¹¶è§¦å‘å›è°ƒ
+      this.isRecording = false;
+      this.onRecordStopCallback?.(duration);
+
+      return { success: true, audioPath: audioPath, duration: duration };
+    } catch (error) {
+      const e = error as BusinessError;
+      const errorMsg = `åœæ­¢å½•éŸ³å¤±è´¥: ${e.message}`;
+      hilog.error(0x0000, 'AudioManager', errorMsg);
+      this.isRecording = false;
+
+      // å³ä½¿å‡ºé”™ä¹Ÿè§¦å‘å›è°ƒï¼Œè®©ç”¨æˆ·çŸ¥é“å½•éŸ³å·²ç»“æŸ
+      this.onRecordStopCallback?.(duration);
+
+      return { success: true, audioPath: audioPath, duration: duration };
+    }
+  }
+
+  private async readPcmDataLoop() {
+    if (!this.audioCapturer) return;
+
+    try {
+      const bufferSize = await this.audioCapturer.getBufferSize();
+
+      while (this.isCapturing) {
+        try {
+          const buffer = await this.audioCapturer.read(bufferSize, true);
+          this.onPcmDataCallback?.(buffer);
+        } catch (error) {
+          hilog.error(0x0000, 'AudioManager', 'è¯»å–PCMæ•°æ®å¤±è´¥');
+          break;
+        }
+      }
+    } catch (error) {
+      hilog.error(0x0000, 'AudioManager', 'è·å–ç¼“å†²åŒºå¤§å°å¤±è´¥');
+      this.isCapturing = false;
+    }
+  }
+
+  async play(audioPath: string): Promise<void> {
+    let fileHandle: fs.File | null = null;
+
+    try {
+      // 1. åœæ­¢å½“å‰æ’­æ”¾
+      if (this.isPlaying) {
+        await this.stop();
+        await this.delay(300);
+      }
+
+      // 2. ç¡®ä¿æ’­æ”¾å™¨å·²åˆå§‹åŒ–
+      await this.initPlayer();
+
+      // 3. æ£€æŸ¥æ–‡ä»¶æ˜¯å¦å­˜åœ¨
+      try {
+        await fs.access(audioPath);
+        hilog.info(0x0000, 'AudioManager', `æ–‡ä»¶å­˜åœ¨: ${audioPath}`);
+      } catch (e) {
+        throw new Error('éŸ³é¢‘æ–‡ä»¶ä¸å­˜åœ¨');
+      }
+
+      // 4. æ ¹æ®å½“å‰çŠ¶æ€å¤„ç†æ’­æ”¾å™¨
+      hilog.info(0x0000, 'AudioManager', `å‡†å¤‡æ’­æ”¾ï¼Œå½“å‰çŠ¶æ€: ${this.playerState}`);
+
+      if (this.playerState === 'released' || !this.player) {
+        hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨å·²é‡Šæ”¾ï¼Œé‡æ–°åˆå§‹åŒ–...');
+        await this.initPlayer();
+      } else if (this.playerState !== 'idle') {
+        hilog.info(0x0000, 'AudioManager', `å½“å‰çŠ¶æ€ ${this.playerState}ï¼Œæ­£åœ¨é‡ç½®...`);
+        await this.player!.reset();
+        await this.waitForPlayerState('idle', 3000);
+      }
+
+      // *** å…³é”®ä¿®å¤ï¼šä½¿ç”¨æ–‡ä»¶æè¿°ç¬¦æ ¼å¼ ***
+      // 5. æ‰“å¼€æ–‡ä»¶è·å–æ–‡ä»¶æè¿°ç¬¦
+      fileHandle = await fs.open(audioPath, fs.OpenMode.READ_ONLY);
+
+      // 6. è·å–æ–‡ä»¶ä¿¡æ¯ï¼ˆç”¨äº AVFileDescriptorï¼‰
+      const stat = await fs.stat(audioPath);
+
+      // 7. æ„é€  AVFileDescriptor å¯¹è±¡
+      const avFileDescriptor: media.AVFileDescriptor = {
+        fd: fileHandle.fd,
+        offset: 0,
+        length: stat.size
+      };
+
+      hilog.info(0x0000, 'AudioManager', `ä½¿ç”¨æ–‡ä»¶æè¿°ç¬¦æ’­æ”¾: fd=${fileHandle.fd}, size=${stat.size}`);
+
+      // 8. è®¾ç½®éŸ³é¢‘æºï¼ˆä½¿ç”¨ AVFileDescriptorï¼‰
+      this.player!.fdSrc = avFileDescriptor;
+
+      // 9. ç­‰å¾…è‡ªåŠ¨è¿›å…¥ initialized çŠ¶æ€
+      await this.waitForPlayerState('initialized', 3000);
+
+      // 10. å‡†å¤‡æ’­æ”¾
+      await this.player!.prepare();
+      hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å™¨å‡†å¤‡ä¸­...');
+
+      // 11. ç­‰å¾…è¿›å…¥ prepared çŠ¶æ€
+      await this.waitForPlayerState('prepared', 3000);
+
+      // 12. å¼€å§‹æ’­æ”¾
+      await this.player!.play();
+      this.currentAudioPath = audioPath;
+      hilog.info(0x0000, 'AudioManager', 'å¼€å§‹æ’­æ”¾');
+
+      // æ³¨æ„ï¼šä¸è¦åœ¨è¿™é‡Œå…³é—­æ–‡ä»¶ï¼Œæ’­æ”¾å®Œæˆåå†å…³é—­
+
+    } catch (error) {
+      // å¦‚æœå‡ºé”™ï¼Œå…³é—­æ–‡ä»¶å¥æŸ„
+      if (fileHandle) {
+        try {
+          fs.closeSync(fileHandle.fd);
+        } catch (e) {
+          hilog.warn(0x0000, 'AudioManager', 'å…³é—­æ–‡ä»¶å¤±è´¥');
+        }
+      }
+
+      const e = error as BusinessError | Error;
+      const errorMsg = `æ’­æ”¾å¤±è´¥: ${e.message}`;
+      hilog.error(0x0000, 'AudioManager', errorMsg);
+      this.onErrorCallback?.(errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+
+  private async waitForPlayerState(targetState: media.AVPlayerState, timeout: number = 3000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.playerState === targetState) {
+        resolve();
+        return;
+      }
+
+      const startTime = Date.now();
+      const checkInterval = setInterval(() => {
+        if (this.playerState === targetState) {
+          clearInterval(checkInterval);
+          resolve();
+        } else if (Date.now() - startTime > timeout) {
+          clearInterval(checkInterval);
+          reject(new Error(`ç­‰å¾…æ’­æ”¾å™¨çŠ¶æ€ ${targetState} è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: ${this.playerState}`));
+        }
+      }, 100);
+    });
+  }
+
+  private async waitForRecorderState(targetState: media.AVRecorderState, timeout: number = 3000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.recorderState === targetState) {
+        resolve();
+        return;
+      }
+
+      const startTime = Date.now();
+      const checkInterval = setInterval(() => {
+        if (this.recorderState === targetState) {
+          clearInterval(checkInterval);
+          resolve();
+        } else if (Date.now() - startTime > timeout) {
+          clearInterval(checkInterval);
+          reject(new Error(`ç­‰å¾…å½•éŸ³å™¨çŠ¶æ€ ${targetState} è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: ${this.recorderState}`));
+        }
+      }, 100);
+    });
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async stop(): Promise<void> {
+    if (!this.isPlaying || !this.player) {
+      hilog.info(0x0000, 'AudioManager', 'å½“å‰æ²¡æœ‰åœ¨æ’­æ”¾');
+      return;
+    }
+
+    try {
+      await this.player.stop();
+      hilog.info(0x0000, 'AudioManager', 'æ’­æ”¾å·²åœæ­¢');
+    } catch (error) {
+      const e = error as BusinessError;
+      hilog.error(0x0000, 'AudioManager', `åœæ­¢æ’­æ”¾å¤±è´¥: ${e.message}`);
+      throw new Error(e.message);
+    }
+  }
+
+  setCallbacks(callbacks: AudioCallbacks): void {
+    this.onRecordStartCallback = callbacks.onRecordStart;
+    this.onRecordStopCallback = callbacks.onRecordStop;
+    this.onPlayStartCallback = callbacks.onPlayStart;
+    this.onPlayCompleteCallback = callbacks.onPlayComplete;
+    this.onErrorCallback = callbacks.onError;
+    this.onPcmDataCallback = callbacks.onPcmData;
+  }
+
+  // æ–°å¢ï¼šæ¸…ç†æ‰€æœ‰èµ„æºçš„æ–¹æ³•
+  async cleanup(): Promise<void> {
+    try {
+      if (this.audioCapturer) {
+        await this.audioCapturer.release();
+        this.audioCapturer = null;
+      }
+      if (this.recorder) {
+        await this.recorder.release();
+        this.recorder = null;
+      }
+      if (this.player) {
+        await this.player.release();
+        this.player = null;
+      }
+      hilog.info(0x0000, 'AudioManager', 'æ‰€æœ‰éŸ³é¢‘èµ„æºå·²æ¸…ç†');
+    } catch (error) {
+      hilog.error(0x0000, 'AudioManager', 'æ¸…ç†èµ„æºå¤±è´¥');
+    }
+  }
+}
+
+export interface RecordConfig {
+  bitrate?: number;
+  channels?: number;
+  sampleRate?: number;
+}
+
+export interface RecordResult {
+  success: boolean;
+  audioPath: string;
+  duration: number;
+}
+
+export interface AudioCallbacks {
+  onRecordStart?: () => void;
+  onRecordStop?: (duration: number) => void;
+  onPlayStart?: () => void;
+  onPlayComplete?: () => void;
+  onError?: (error: string) => void;
+  onPcmData?: (data: ArrayBuffer) => void;
+}ÀÔrE”¶@ohos.multimedia.media¶@ohos.multimedia.audio­@ohos.file.fs«@ohos.hilogÔrF—ªassertions¨external¢id¤meta±moduleSideEffectsªresolvedByµsyntheticNamedExportsAÃÙb hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.media.d.tsÔrG‘¯hostModulesInfo‘C¶@ohos.multimedia.media¥entryÃªoh-resolveÂFAÃÙb hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.multimedia.audio.d.tsG‘C¶@ohos.multimedia.audio¥entryÃªoh-resolveÂFAÃÙY hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.file.fs.d.tsG’C­@ohos.file.fs¥entryC­@ohos.file.fs¥entryÃªoh-resolveÂFAÃÙW hvigor_ignore_E:_Huawei_DevEco Studio_sdk_default_openharmony_ets_api_@ohos.hilog.d.tsAÃªoh-resolveÂ“ÔrH–§version¤fileªsourceRoot§sources¥names¨mappings¯AudioManager.js ‘°AudioManager.etsÜË–”    ”  ”  ”  ”*  *”+  +–”   ” ” ” ”* *”+ +–”   ” ”	 	” ” ” –”   ” ” ” ” ”   ‘”   ‘” 
+””   ” ” ” ‘” %•” 
+” ” .” 2” 3•” 
+” ” *” .” /•” 
+” ” 6”! :”" ;•” 
+” ” !”  &”! '•” 
+” ” !”  &”! '•” 
+” ” ” $” %•” 
+” ”  %”" '”# (•” 
+” ” $”  %”! &•” 
+” ” -”! 3”" 4•” 
+” ” 1”# 7”$ 8’” ” •” 
+”#  ”& ,”+ 1”, 2•” 
+”! ”$ *”) /”* 0’” %” %”” '”
+ '” '	” '—” (” (” (	” (” (”" (”$ ( ™” )” )” )”! )”$ )”( )"”4 ).”6 )0”7 )1‘”	 *–” +” +” +” +”$ + ”% +!’” ,” ,”” .”	 .”
+ .” .’” /” /–” 0” 0” 0” 0”' 0#”) 0%œ” 1” 1” 1” 1” 1” 1” 1”- 1'”/ 1)”= 17”> 18”? 19’” 2” 2‘”	 3œ” 5” 5” 5” 5” 5” 5”! 5”" 5”/ 5+”4 50”> 5:”Ì@ 5<œ” 6” 6” 6” 6” 6” 6” 6”- 6'”/ 6)”: 64”; 65”< 66’” 7” 7‘”	 8’” :” :—” ;” ;
+” ;”' ;!”* ;$”. ;(”/ ;)’” =” =–” >” >
+” >” >” >” >’” ?” ?™” Ì@
+” Ì@” Ì@” Ì@”' Ì@”( Ì@”/ Ì@%”1 Ì@'”2 Ì@(‘” ÌA	”” ÌA
+” ÌA” ÌA” ÌAœ” ÌB
+” ÌB” ÌB” ÌB” ÌB”% ÌB”' ÌB”5 ÌB+”7 ÌB-”ÌD ÌB:”ÌE ÌB;”ÌF ÌB<‘” ÌC	‘” ÌD›” ÌF” ÌF
+” ÌF” ÌF” ÌF”" ÌF”' ÌF!”( ÌF"”8 ÌF2”: ÌF4”; ÌF5—” ÌG” ÌG
+” ÌG” ÌG”! ÌG”' ÌG!”( ÌG"’” ÌI” ÌI” ÌJ” ÌJ
+” ÌJ” ÌJ” ÌJ” ÌJ” ÌJ”* ÌJ$”, ÌJ&”- ÌJ'”2 ÌJÌC”4 ÌJÌE”6 ÌJÌG” ÌK” ÌK” ÌK” ÌK” ÌK”! ÌK”# ÌK”1 ÌK)”3 ÌK+”? ÌK7”ÌD ÌK<”ÌF ÌK>”ÌG ÌK?”ÌH ÌKÌ@—” ÌL” ÌL” ÌL”" ÌL”% ÌL”* ÌL"”+ ÌL#”” ÌM” ÌM” ÌM” ÌM	œ” ÌO” ÌO” ÌO” ÌO” ÌO” ÌO” ÌO”- ÌO'”/ ÌO)”9 ÌO3”: ÌO4”; ÌO5‘”	 ÌP”” ÌP” ÌP” ÌP” ÌP–” ÌQ” ÌQ” ÌQ” ÌQ” ÌQ&” ÌQ'š” ÌR” ÌR” ÌR” ÌR”* ÌR$”+ ÌR%”, ÌR&”3 ÌR-”5 ÌR/”6 ÌR0œ” ÌS” ÌS” ÌS” ÌS” ÌS” ÌS”  ÌS”. ÌS(”0 ÌS*”8 ÌS2”9 ÌS3”: ÌS4™” ÌT” ÌT
+” ÌT”  ÌT”" ÌT”# ÌT”+ ÌT%”, ÌT&”- ÌT'˜” ÌU” ÌU” ÌU” ÌU” ÌU”$ ÌU”% ÌU”& ÌU ‘”	 ÌV‘” ÌV—” ÌW” ÌW
+” ÌW”' ÌW!”* ÌW$”/ ÌW)”0 ÌW*‘”	 ÌX’” ÌY” ÌY”” Ì[”	 Ì[”
+ Ì[” Ì[’” Ì\” Ì\–” Ì]” Ì]” Ì]” Ì]”% Ì]!”' Ì]#œ” Ì^” Ì^” Ì^” Ì^” Ì^” Ì^” Ì^”- Ì^'”/ Ì^)”= Ì^7”> Ì^8”? Ì^9’” Ì_” Ì_‘”	 Ì`’” Ìb” Ìbœ” Ìc” Ìc” Ìc” Ìc” Ìc” Ìc” Ìc”  Ìc”+ Ìc'”0 Ìc,”: Ìc6”< Ìc8Ü ” Ìd” Ìd” Ìd” Ìd” Ìd” Ìd” Ìd”- Ìd'”/ Ìd)”? Ìd9”ÌC Ìd=”ÌD Ìd>”ÌO ÌdÌI”ÌQ ÌdÌK”ÌR ÌdÌL”ÌS ÌdÌM’” Ìe” Ìe‘”	 Ìf’” Ìh” Ìh—” Ìi” Ìi
+” Ìi”% Ìi”( Ìi"”, Ìi&”- Ìi'’” Ìk” Ìk–” Ìl” Ìl
+” Ìl” Ìl” Ìl” Ìl’” Ìm” Ìm™” Ìn
+” Ìn” Ìn” Ìn”% Ìn”& Ìn”- Ìn#”/ Ìn%”0 Ìn&‘” Ìo	”” Ìo
+” Ìo” Ìo” Ìoœ” Ìp
+” Ìp” Ìp” Ìp” Ìp”% Ìp”' Ìp”5 Ìp+”7 Ìp-”ÌD Ìp:”ÌE Ìp;”ÌF Ìp<‘” Ìq	‘” Ìr›” Ìt” Ìt
+” Ìt” Ìt” Ìt”  Ìt”% Ìt”& Ìt ”4 Ìt.”6 Ìt0”7 Ìt1—” Ìu” Ìu
+” Ìu” Ìu” Ìu”% Ìu”& Ìu ” Ìw” Ìw
+” Ìw” Ìw” Ìw” Ìw” Ìw”( Ìw"”* Ìw$”+ Ìw%”0 Ìw?”2 ÌwÌA”4 ÌwÌC” Ìx” Ìx” Ìx” Ìx” Ìx”! Ìx”# Ìx”1 Ìx)”3 Ìx+”? Ìx7”ÌD Ìx<”ÌF Ìx>”ÌG Ìx?”ÌH ÌxÌ@—” Ìy” Ìy” Ìy”  Ìy”# Ìy”( Ìy ”) Ìy!š” Ì{” Ì{” Ì{” Ì{”) Ì{!”- Ì{%”2 Ì{*”7 Ì{/”Ì@ Ì{8”ÌB Ì{:—” Ì|
+” Ì|” Ì|”" Ì|”% Ì|”* Ì| ”+ Ì|!—” Ì}
+” Ì}” Ì}”/ Ì}%”1 Ì}'”3 Ì})”4 Ì}*‘” Ì~	–” Ì~” Ì~” Ì~”# Ì~”, Ì~&”. Ì~(—” Ì
+” Ì” Ì”" Ì”% Ì”) Ì”* Ì —” Ì€
+” Ì€” Ì€”, Ì€"”. Ì€$”0 Ì€&”1 Ì€'‘” Ì	”” Ì‚” Ì‚” Ì‚” Ì‚	” Ì„” Ì„
+” Ì„” Ì„” Ì„” Ì„” Ì„”" Ì„”$ Ì„”% Ì„”( Ì„"”* Ì„$”, Ì„&–” Ì…” Ì…” Ì…” Ì…” Ì…” Ì…—” Ì†” Ì†” Ì†” Ì†”! Ì†”& Ì†”' Ì†Ü ” Ì‡” Ì‡” Ì‡” Ì‡” Ì‡”" Ì‡”$ Ì‡”2 Ì‡*”4 Ì‡,”= Ì‡5”> Ì‡6”? Ì‡7”ÌF Ì‡>”ÌH Ì‡Ì@”ÌI Ì‡ÌA”ÌJ Ì‡ÌB” Ìˆ” Ìˆ” Ìˆ”$ Ìˆ”& Ìˆ”' Ìˆ”/ Ìˆ'”2 Ìˆ*”3 Ìˆ+”4 Ìˆ,”; Ìˆ3”< Ìˆ4”= Ìˆ5”” Ì‰” Ì‰” Ì‰” Ì‰	œ” Ì‹” Ì‹” Ì‹” Ì‹” Ì‹” Ì‹” Ì‹”- Ì‹'”/ Ì‹)”9 Ì‹3”: Ì‹4”; Ì‹5‘”	 ÌŒ”” ÌŒ” ÌŒ” ÌŒ” ÌŒ–” Ì” Ì” Ì” Ì” Ì&” Ì'š” Ì” Ì” Ì” Ì”* Ì$”+ Ì%”, Ì&”3 Ì-”5 Ì/”6 Ì0œ” Ì” Ì” Ì” Ì” Ì” Ì”  Ì”. Ì(”0 Ì*”8 Ì2”9 Ì3”: Ì4™” Ì” Ì
+” Ì”  Ì”" Ì”# Ì”+ Ì%”, Ì&”- Ì'˜” Ì‘” Ì‘” Ì‘” Ì‘” Ì‘”$ Ì‘”% Ì‘”& Ì‘ ‘”	 Ì’‘” Ì’—” Ì“” Ì“
+” Ì“”% Ì“”( Ì“"”- Ì“'”. Ì“(‘”	 Ì”’” Ì•” Ì•”” Ì—”	 Ì—”
+ Ì—” Ì—–” Ì˜” Ì˜” Ì˜” Ì˜” Ì˜”  Ì˜œ” Ì™” Ì™” Ì™” Ì™” Ì™” Ì™” Ì™”- Ì™'”/ Ì™)”ÌB Ì™<”ÌC Ì™=”ÌD Ì™>’” Ìš” Ìš‘”	 Ì›’” Ì” Ì”” Ì” Ì”! Ì”$ Ì5˜” ÌŸ” ÌŸ” ÌŸ”# ÌŸ”$ ÌŸ”5 ÌŸ-”6 ÌŸ.”ÌG ÌŸ?˜” Ì ” Ì ” Ì ” Ì ”  Ì ”, Ì $”- Ì %”6 Ì .˜” Ì¡” Ì¡” Ì¡”# Ì¡”$ Ì¡”5 Ì¡-”6 Ì¡.”ÌI Ì¡ÌA˜” Ì¢” Ì¢” Ì¢”# Ì¢”$ Ì¢”5 Ì¢-”6 Ì¢.”ÌG Ì¢?’” Ì£” Ì£”” Ì¤” Ì¤”# Ì¤”& Ì¤9˜” Ì¥” Ì¥” Ì¥” Ì¥” Ì¥”( Ì¥ ”) Ì¥!”8 Ì¥0”” Ì¦” Ì¦” Ì¦”  Ì¦’” Ì§” Ì§”” Ì©” Ì©”! Ì©”$ Ì©:”” Ìª” Ìª” Ìª”+ Ìª#”” Ì«” Ì«” Ì«”/ Ì«'’” Ì¬” Ì¬” Ì­” Ì­
+” Ì­” Ì­”! Ì­”' Ì­!”, Ì­&”- Ì­'”Ì@ Ì­:”ÌA Ì­;”ÌP Ì­ÌJ”ÌQ Ì­ÌK”ÌR Ì­ÌLœ” Ì¯” Ì¯” Ì¯” Ì¯” Ì¯” Ì¯” Ì¯”- Ì¯'”/ Ì¯)”ÌD Ì¯>”ÌE Ì¯?”ÌF Ì¯Ì@‘”	 Ì°”” Ì°” Ì°” Ì°” Ì°–” Ì±” Ì±” Ì±” Ì±” Ì±&” Ì±'š” Ì²” Ì²” Ì²” Ì²”5 Ì²/”6 Ì²0”7 Ì²1”> Ì²8”Ì@ Ì²:”ÌA Ì²;œ” Ì³” Ì³” Ì³” Ì³” Ì³” Ì³”  Ì³”. Ì³(”0 Ì³*”8 Ì³2”9 Ì³3”: Ì³4™” Ì´” Ì´
+” Ì´”  Ì´”" Ì´”# Ì´”+ Ì´%”, Ì´&”- Ì´'˜” Ìµ” Ìµ” Ìµ” Ìµ” Ìµ”$ Ìµ”% Ìµ”& Ìµ ‘”	 Ì¶’” Ì·” Ì·˜” Ì¹”	 Ì¹”
+ Ì¹” Ì¹” Ì¹”" Ì¹(”$ Ì¹*”* Ì¹?–” Ìº” Ìº” Ìº” Ìº” Ìº” Ìºœ” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»” Ì»”- Ì»'”/ Ì»)”7 Ì»1”8 Ì»2”9 Ì»3’” Ì¼” Ì¼‘”	 Ì½’” Ì¿” Ì¿’” ÌÀ” ÌÀ—” ÌÁ” ÌÁ” ÌÁ” ÌÁ”# ÌÁ”% ÌÁ”& ÌÁ ’” ÌÃ”' ÌÃ!˜” ÌÄ” ÌÄ
+” ÌÄ” ÌÄ”" ÌÄ”' ÌÄ!”- ÌÄ'”/ ÌÄ)Ü ” ÌÅ” ÌÅ” ÌÅ” ÌÅ” ÌÅ”! ÌÅ”# ÌÅ”1 ÌÅ)”3 ÌÅ+”= ÌÅ5”ÌA ÌÅ9”ÌB ÌÅ:”ÌO ÌÅÌG”ÌY ÌÅÌQ”ÌZ ÌÅÌR”Ì[ ÌÅÌS™” ÌÆ” ÌÆ” ÌÆ” ÌÆ”# ÌÆ”$ ÌÆ”) ÌÆ"”+ ÌÆ$”, ÌÆ%›” ÌÇ” ÌÇ” ÌÇ” ÌÇ”/ ÌÇ'”0 ÌÇ(”6 ÌÇ.”8 ÌÇ0”< ÌÇ4”= ÌÇ5”> ÌÇ6‘” ÌÈ’” ÌÊ” ÌÊÜ ” ÌË” ÌË” ÌË” ÌË” ÌË”! ÌË”" ÌË”& ÌË ”' ÌË!”0 ÌË*”2 ÌË,”4 ÌË.”5 ÌË/”= ÌË7”> ÌË8”ÌH ÌËÌB”ÌK ÌËÌE”ÌM ÌËÌG”ÌN ÌËÌH”ÌV ÌËÌP”ÌW ÌËÌQ”Ì] ÌËÌW”Ì^ ÌËÌX”Ì_ ÌËÌY’” ÌÍ” ÌÍ”” ÌÎ” ÌÎ” ÌÎ”" ÌÎ4˜” ÌÏ” ÌÏ”! ÌÏ”& ÌÏ”' ÌÏ”6 ÌÏ.”7 ÌÏ/”ÌL ÌÏÌD“” ÌĞ” ÌĞ” ÌĞ˜” ÌÑ
+”  ÌÑ”" ÌÑ”( ÌÑ”* ÌÑ ”1 ÌÑ'”5 ÌÑ+”: ÌÑ0˜” ÌÒ
+”! ÌÒ”# ÌÒ”) ÌÒ”+ ÌÒ!”3 ÌÒ)”7 ÌÒ-”8 ÌÒ.˜” ÌÓ
+” ÌÓ”  ÌÓ”% ÌÓ”& ÌÓ”3 ÌÓ)”4 ÌÓ*”= ÌÓ3˜” ÌÔ
+”# ÌÔ”% ÌÔ”+ ÌÔ!”- ÌÔ#”7 ÌÔ-”; ÌÔ1”Ì@ ÌÔ6˜” ÌÕ
+” ÌÕ”  ÌÕ”% ÌÕ”& ÌÕ”9 ÌÕ/”: ÌÕ0”ÌE ÌÕ;‘” ÌÖ	˜” Ì×” Ì×” Ì×” Ì×”! Ì×”" Ì×”$ Ì×”& Ì×’” ÌØ” ÌØ’” ÌÚ” ÌÚ›” ÌÛ” ÌÛ” ÌÛ” ÌÛ” ÌÛ”  ÌÛ”' ÌÛ"”( ÌÛ#”5 ÌÛ0”6 ÌÛ1”7 ÌÛ2›” ÌÜ” ÌÜ” ÌÜ” ÌÜ”+ ÌÜ%”, ÌÜ&”6 ÌÜ0”8 ÌÜ2”< ÌÜ6”= ÌÜ7”> ÌÜ8™” ÌŞ” ÌŞ” ÌŞ” ÌŞ” ÌŞ”  ÌŞ”% ÌŞ ”' ÌŞ"”( ÌŞ#œ” Ìß” Ìß” Ìß” Ìß” Ìß” Ìß” Ìß”- Ìß'”/ Ìß)”8 Ìß2”9 Ìß3”: Ìß4’” Ìá” Ìá—” Ìâ” Ìâ” Ìâ” Ìâ”# Ìâ”% Ìâ”& Ìâ –” Ìã” Ìã
+” Ìã” Ìã”" Ìã”$ Ìã™” Ìä” Ìä” Ìä” Ìä”( Ìä ”) Ìä!”. Ìä&”0 Ìä(”1 Ìä)—” Ìå” Ìå” Ìå”  Ìå”# Ìå”' Ìå”( Ìå –” Ìæ” Ìæ” Ìæ”$ Ìæ”& Ìæ”' Ìæœ” Ìç” Ìç” Ìç” Ìç” Ìç”! Ìç”# Ìç”1 Ìç)”3 Ìç+”? Ìç7”Ì@ Ìç8”ÌA Ìç9‘” Ìè’” Ìê” Ìê—” Ìë” Ìë
+” Ìë” Ìë” Ìë”# Ìë”$ Ìë—” Ìì” Ìì
+” Ìì”! Ìì”$ Ìì”- Ìì'”. Ìì(š” Ìí” Ìí
+” Ìí”  Ìí”# Ìí”' Ìí!”( Ìí"”+ Ìí%”- Ìí'”. Ìí(—” Ìî” Ìî
+” Ìî”& Ìî ”( Ìî"”* Ìî$”+ Ìî%‘”	 Ìğ”” Ìğ” Ìğ” Ìğ” Ìğ–” Ìñ” Ìñ” Ìñ” Ìñ” Ìñ&” Ìñ'š” Ìò” Ìò” Ìò” Ìò”( Ìò"”) Ìò#”* Ìò$”1 Ìò+”3 Ìò-”4 Ìò.œ” Ìó” Ìó” Ìó” Ìó” Ìó” Ìó”  Ìó”. Ìó(”0 Ìó*”8 Ìó2”9 Ìó3”: Ìó4—” Ìô” Ìô
+” Ìô” Ìô” Ìô”$ Ìô”% Ìô™” Ìõ” Ìõ
+” Ìõ”  Ìõ”" Ìõ”# Ìõ”+ Ìõ%”, Ìõ&”- Ìõ'˜” Ìö” Ìö” Ìö” Ìö” Ìö”$ Ìö”% Ìö”& Ìö ‘”	 Ì÷’” Ìø” Ìø”” Ìú”	 Ìú”
+ Ìú” Ìú—” Ìû” Ìû” Ìû	” Ìû” Ìû” Ìû” Ìûœ” Ìü” Ìü” Ìü” Ìü” Ìü” Ìü” Ìü”- Ìü'”/ Ìü)”8 Ìü2”9 Ìü3”: Ìü4Ü ” Ìı” Ìı” Ìı” Ìı” Ìı”# Ìı”% Ìı”. Ìı(”0 Ìı*”2 Ìı,”4 Ìı.”< Ìı6”> Ìı8”? Ìı9”ÌA Ìı;”ÌB Ìı<‘”	 Ìş—” Í ” Í ” Í 	” Í ” Í ” Í ” Í œ” Í” Í” Í” Í” Í” Í”  Í”. Í(”0 Í*”8 Í2”9 Í3”: Í4Ü ” Í” Í” Í” Í” Í”# Í”% Í”. Í(”0 Í*”2 Í,”4 Í.”< Í6”> Í8”? Í9”ÌA Í;”ÌB Í<‘”	 Í’” Í”  ÍÜ ” Í” Í
+” Í” Í” Í” Í”# Í”$ Í ”% Í!”) Í%”* Í&”- Í)”/ Í+”2 Í.”6 Í2”7 Í3”ÌF ÍÌB”ÌG ÍÌC”ÌJ ÍÌF”ÌN ÍÌJ”ÌO ÍÌK”ÌP ÍÌL˜” Í” Í
+” Í” Í” Í” Í”/ Í+”0 Í,’” Í	” Í	’” Í
+” Í
+—” Í” Í
+” Í” Í” Í”$ Í”% Í–” Í” Í
+” Í” Í”" Í”$ Í’” Í” Í™” Í
+” Í” Í” Í”, Í"”- Í#”1 Í'”3 Í)”4 Í*™” Í
+” Í” Í” Í”, Í"”- Í#”4 Í*”6 Í,”7 Í-—” Í
+” Í” Í”& Í”) Í”- Í#”. Í$œ” Í
+” Í” Í” Í” Í”% Í”' Í”5 Í+”7 Í-”ÌB Í8”ÌC Í9”ÌD Í:‘” Í	”” Í
+” Í” Í” Íœ” Í
+” Í” Í” Í” Í”% Í”' Í”5 Í+”7 Í-”ÌF Í<”ÌG Í=”ÌH Í>‘” Í	‘” Í’” Í” Í” Í” Í
+” Í” Í”" Í”' Í!”- Í'”1 Í+”5 Í/”6 Í0”ÌC Í=”ÌH ÍÌB”ÌR ÍÌL”ÌT ÍÌNÜ ” Í” Í” Í” Í” Í”! Í”# Í”1 Í)”3 Í+”? Í7”ÌC Í;”ÌD Í<”ÌQ ÍÌI”ÌZ ÍÌR”Ì[ ÍÌS”Ì\ ÍÌT—” Í” Í” Í”  Í”# Í”( Í ”) Í!™” Í” Í” Í”) Í!”+ Í#”, Í$”4 Í,”5 Í-”6 Í.Ü ” Í” Í” Í”  Í”" Í”& Í”( Í ”1 Í)”3 Í+”< Í4”> Í6”ÌF Í>”ÌH ÍÌ@”ÌP ÍÌH”ÌR ÍÌJ”ÌS ÍÌK‘” Í’” Í”& Í ˜” Í ” Í 
+” Í ” Í ”" Í ”' Í !”0 Í *”2 Í ,’” Í!” Í!™” Í"
+” Í"” Í"” Í"”' Í"”( Í"”, Í""”. Í"$”/ Í"%œ” Í#
+” Í#” Í#” Í#” Í#”% Í#”' Í#”5 Í#+”7 Í#-”? Í#5”Ì@ Í#6”ÌA Í#7‘” Í$	”” Í$
+” Í$” Í$” Í$œ” Í%
+” Í%” Í%” Í%” Í%”% Í%”' Í%”5 Í%+”7 Í%-”ÌE Í%;”ÌF Í%<”ÌG Í%=‘” Í&	‘” Í'’” Í)”! Í)’” Í*” Í*
+™” Í+” Í+” Í+” Í+”# Í+”$ Í+”) Í+!”+ Í+#”, Í+$œ” Í,” Í,” Í,” Í,” Í,”! Í,”# Í,”1 Í,)”3 Í,+”; Í,3”< Í,4”= Í,5‘” Í-”” Í-” Í-” Í-” Í-œ” Í.” Í.” Í.” Í.” Í.”! Í.”# Í.”1 Í.)”3 Í.+”< Í.4”= Í.5”> Í.6‘” Í/’” Í1” Í1—” Í2” Í2
+” Í2” Í2” Í2”$ Í2”% Í2™” Í3” Í3
+” Í3”% Í3”' Í3!”( Í3"”0 Í3*”1 Í3+”2 Í3,Ü ” Í5” Í5” Í5” Í5” Í5”" Í5”$ Í5”- Í5'”/ Í5)”8 Í52”: Í54”ÌB Í5<”ÌD Í5>”ÌL Í5ÌF”ÌN Í5ÌH”ÌO Í5ÌI‘”	 Í6”” Í6” Í6” Í6” Í6–” Í7” Í7” Í7” Í7” Í7&” Í7'š” Í8” Í8” Í8” Í8”( Í8"”) Í8#”* Í8$”1 Í8+”3 Í8-”4 Í8.œ” Í9” Í9” Í9” Í9” Í9” Í9”  Í9”. Í9(”0 Í9*”8 Í92”9 Í93”: Í94—” Í:” Í:
+” Í:” Í:” Í:”$ Í:”% Í:’” Í<”# Í<™” Í=” Í=
+” Í=”% Í=”' Í=!”( Í="”0 Í=*”1 Í=+”2 Í=,Ü ” Í?” Í?” Í?” Í?” Í?”" Í?”$ Í?”- Í?'”/ Í?)”8 Í?2”: Í?4”ÌB Í?<”ÌD Í?>”ÌL Í?ÌF”ÌN Í?ÌH”ÌO Í?ÌI‘”	 Í@’” ÍA” ÍA”” ÍC
+”	 ÍC”
+ ÍC” ÍC–” ÍD” ÍD” ÍD	” ÍD” ÍD” ÍD’” ÍD” ÍD$’” ÍF” ÍFœ” ÍG” ÍG” ÍG” ÍG”% ÍG”) ÍG#”* ÍG$”7 ÍG1”8 ÍG2”ÌE ÍG?”ÌG ÍGÌA”ÌH ÍGÌB–” ÍI” ÍI” ÍI” ÍI”# ÍI”% ÍI’” ÍJ” ÍJÜ ” ÍK
+” ÍK”  ÍK”# ÍK”) ÍK”- ÍK#”. ÍK$”; ÍK1”< ÍK2”Ì@ ÍK6”ÌA ÍK7”ÌK ÍKÌA”ÌM ÍKÌC”ÌQ ÍKÌG”ÌR ÍKÌH”ÌS ÍKÌI™” ÍL
+” ÍL” ÍL”* ÍL ”, ÍL"”- ÍL#”3 ÍL)”4 ÍL*”5 ÍL+‘” ÍM	”” ÍM
+” ÍM” ÍM” ÍMœ” ÍN
+” ÍN” ÍN” ÍN”  ÍN”& ÍN”( ÍN”6 ÍN,”8 ÍN.”ÌC ÍN9”ÌD ÍN:”ÌE ÍN;’” ÍO
+” ÍO‘” ÍP	‘” ÍQ‘”	 ÍR”” ÍR” ÍR” ÍR” ÍRœ” ÍS” ÍS” ÍS” ÍS” ÍS” ÍS”  ÍS”. ÍS(”0 ÍS*”; ÍS5”< ÍS6”= ÍS7—” ÍT” ÍT
+” ÍT” ÍT” ÍT”$ ÍT”% ÍT‘”	 ÍU’” ÍV” ÍV–” ÍX”	 ÍX”
+ ÍX” ÍX” ÍX” ÍX–” ÍY” ÍY” ÍY” ÍY%” ÍY)” ÍY*’” Í[” Í[’” Í\” Í\–” Í]” Í]
+” Í]” Í]” Í]”  Í]—” Í^” Í^” Í^” Í^” Í^”! Í^”" Í^™” Í_” Í_” Í_” Í_”  Í_”! Í_”$ Í_”% Í_”& Í_‘” Í`’” Íb” Íb—” Íc” Íc” Íc” Íc”! Íc”# Íc”$ Íc’” Íe” Íe’” Íf” Íf
+™” Íg” Íg” Íg” Íg” Íg”  Íg”) Íg!”* Íg"”+ Íg#” Íh” Íh” Íh” Íh” Íh”! Íh”# Íh”1 Íh)”3 Íh+”< Íh4”ÌE Íh=”ÌG Íh?”ÌH ÍhÌ@”ÌI ÍhÌA‘” Íi”” Íi” Íi” Íi” Íi˜” Íj” Íj” Íj” Íj”  Íj”) Íj!”* Íj"”+ Íj#‘” Ík’” Ím” ÍmÜ ” Ín” Ín” Ín” Ín” Ín” Ín” Ín”- Ín'”/ Ín)”= Ín7”ÌA Ín;”ÌB Ín<”ÌM ÍnÌG”ÌO ÍnÌI”ÌP ÍnÌJ”ÌQ ÍnÌK” Íp” Íp
+” Íp” Íp”  Íp”% Íp”/ Íp)”3 Íp-”4 Íp.”8 Íp2”9 Íp3”? Íp9”ÌA Íp;œ” Íq” Íq” Íq” Íq” Íq”! Íq”# Íq”1 Íq)”3 Íq+”ÌD Íq<”ÌE Íq=”ÌF Íq>—” Ír” Ír” Ír” Ír”% Ír”' Ír”( Ír ‘” Ís˜” Ís” Ís” Ís” Ís”% Ís!”* Ís&”0 Ís,”2 Ís.Ü ” Ít” Ít” Ít” Ít” Ít”! Ít”# Ít”1 Ít)”3 Ít+”; Ít3”? Ít7”Ì@ Ít8”ÌK ÍtÌC”ÌU ÍtÌM”ÌV ÍtÌN”ÌW ÍtÌO™” Íu” Íu” Íu” Íu”! Íu”" Íu”' Íu ”) Íu"”* Íu#›” Ív” Ív” Ív” Ív”- Ív%”. Ív&”4 Ív,”6 Ív.”: Ív2”; Ív3”< Ív4‘” Íw’” Íy”% Íy’” Íz” ÍzÜ ” Í{” Í{” Í{” Í{”! Í{”" Í{”& Í{ ”' Í{!”0 Í{*”2 Í{,”4 Í{.”5 Í{/”= Í{7”> Í{8”ÌG Í{ÌA”ÌH Í{ÌB”ÌI Í{ÌC’” Í}”- Í}'œ” Í~” Í~” Í~” Í~” Í~”! Í~”" Í~”& Í~ ”' Í~!”0 Í~*”1 Í~+”2 Í~,’” Í€”( Í€"”” Í” Í”" Í”% Í7–” Í‚” Í‚
+” Í‚” Í‚” Í‚”! Í‚”” Íƒ” Íƒ” Íƒ” Íƒ–” Í„” Í„” Í„” Í„” Í„”! Í„’” Í…” Í…Ü ” Í‡” Í‡” Í‡” Í‡” Í‡” Í‡” Í‡”- Í‡'”/ Í‡)”Ì@ Í‡:”ÌJ Í‡ÌD”ÌK Í‡ÌE”ÌM Í‡ÌG”ÌW Í‡ÌQ”Ì[ Í‡ÌU”Ì\ Í‡ÌV”Ì` Í‡ÌZ”Ìb Í‡Ì\”Ìc Í‡Ì]”Ìd Í‡Ì^’” Í‰”, Í‰&™” ÍŠ” ÍŠ
+” ÍŠ” ÍŠ” ÍŠ” ÍŠ”  ÍŠ”0 ÍŠ+”1 ÍŠ,’” ÍŒ”' ÍŒ!›” Í” Í” Í” Í”) Í#”* Í$”7 Í1”9 Í3”= Í7”> Í8”? Í9’” Í” Í™” Í” Í” Í” Í” Í” Í”% Í ”' Í"”( Í#œ” Í‘” Í‘” Í‘” Í‘” Í‘” Í‘” Í‘”- Í‘'”/ Í‘)”: Í‘4”; Í‘5”< Í‘6’” Í“”# Í“›” Í”” Í”” Í”” Í””) Í”#”* Í”$”4 Í”.”6 Í”0”: Í”4”; Í”5”< Í”6’” Í–” Í–™” Í—” Í—” Í—” Í—” Í—” Í—”" Í—”$ Í—”% Í— —” Í˜” Í˜
+” Í˜”! Í˜”$ Í˜”- Í˜'”. Í˜(œ” Í™” Í™” Í™” Í™” Í™” Í™” Í™”- Í™'”/ Í™)”5 Í™/”6 Í™0”7 Í™1’” Í›”$ Í›‘”	 Í”” Í” Í” Í” Í’” Í” Í”” ÍŸ” ÍŸ
+” ÍŸ” ÍŸ’” Í ” Í š” Í¡
+” Í¡” Í¡”  Í¡”! Í¡”+ Í¡!”, Í¡"”. Í¡$”/ Í¡%”0 Í¡&‘” Í¢	”” Í¢
+” Í¢” Í¢” Í¢œ” Í£
+” Í£” Í£” Í£” Í£”% Í£”' Í£”5 Í£+”7 Í£-”? Í£5”Ì@ Í£6”ÌA Í£7‘” Í¤	‘” Í¥–” Í§” Í§” Í§” Í§” Í§.” Í§/š” Í¨” Í¨” Í¨” Í¨”& Í¨ ”' Í¨!”( Í¨"”/ Í¨)”1 Í¨+”2 Í¨,œ” Í©” Í©” Í©” Í©” Í©” Í©”  Í©”. Í©(”0 Í©*”8 Í©2”9 Í©3”: Í©4™” Íª” Íª
+” Íª”  Íª”" Íª”# Íª”+ Íª%”, Íª&”- Íª'˜” Í«” Í«” Í«” Í«” Í«”$ Í«”% Í«”& Í« ‘”	 Í¬’” Í­” Í­™” Í¯
+”	 Í¯”
+ Í¯” Í¯"” Í¯#”( Í¯ÌC”* Í¯ÌE”4 Í¯ÌW”8 Í¯Ì[›” Í°” Í°” Í°” Í°” Í°” Í°”# Í°”% Í°!”+ Í°'”- Í°)”/ Í°+˜” Í±” Í±
+” Í±” Í±”  Í±”% Í±”0 Í±*”2 Í±,”” Í²” Í²” Í²” Í²’” Í³” Í³‘” Í´™” Í¶” Í¶” Í¶” Í¶”" Í¶”# Í¶”& Í¶ ”( Í¶"”) Í¶#˜” Í·” Í·” Í·”" Í·”- Í·'”. Í·(”1 Í·+”3 Í·-˜” Í¸” Í¸” Í¸” Í¸”$ Í¸”) Í¸!”4 Í¸,”6 Í¸.–” Í¹
+”! Í¹”" Í¹”/ Í¹%”0 Í¹&”1 Í¹'”” Íº
+” Íº” Íº” Íº‘” Í»	›” Í»” Í»” Í»” Í»”! Í»”# Í»”& Í» ”/ Í»)”2 Í»,”9 Í»3”; Í»5–” Í¼
+”! Í¼”" Í¼”/ Í¼%”0 Í¼&”1 Í¼'Ü ” Í½
+” Í½” Í½” Í½”$ Í½”% Í½”0 Í½&”; Í½1”ÌH Í½>”ÌL Í½ÌB”ÌM Í½ÌC”ÌX Í½ÌN”ÌZ Í½ÌP”Ì[ Í½ÌQ”Ì\ Í½ÌR”Ì] Í½ÌS‘” Í¾	–” Í¿” Í¿” Í¿	” Í¿” Í¿” Í¿”” ÍÀ”	 ÍÀ”
+ ÍÀ” ÍÀ’” ÍÁ” ÍÁ™” ÍÃ
+”	 ÍÃ”
+ ÍÃ” ÍÃ$” ÍÃ%”* ÍÃÌG”, ÍÃÌI”6 ÍÃÌ[”: ÍÃÌ_›” ÍÄ” ÍÄ” ÍÄ” ÍÄ” ÍÄ” ÍÄ”# ÍÄ”% ÍÄ!”+ ÍÄ'”- ÍÄ)”/ ÍÄ+˜” ÍÅ” ÍÅ
+” ÍÅ” ÍÅ”" ÍÅ”' ÍÅ!”2 ÍÅ,”4 ÍÅ.”” ÍÆ” ÍÆ” ÍÆ” ÍÆ’” ÍÇ” ÍÇ‘” ÍÈ™” ÍÊ” ÍÊ” ÍÊ” ÍÊ”" ÍÊ”# ÍÊ”& ÍÊ ”( ÍÊ"”) ÍÊ#˜” ÍË” ÍË” ÍË”" ÍË”- ÍË'”. ÍË(”1 ÍË+”3 ÍË-˜” ÍÌ” ÍÌ” ÍÌ” ÍÌ”& ÍÌ”+ ÍÌ#”6 ÍÌ.”8 ÍÌ0–” ÍÍ
+”! ÍÍ”" ÍÍ”/ ÍÍ%”0 ÍÍ&”1 ÍÍ'”” ÍÎ
+” ÍÎ” ÍÎ” ÍÎ‘” ÍÏ	›” ÍÏ” ÍÏ” ÍÏ” ÍÏ”! ÍÏ”# ÍÏ”& ÍÏ ”/ ÍÏ)”2 ÍÏ,”9 ÍÏ3”; ÍÏ5–” ÍĞ
+”! ÍĞ”" ÍĞ”/ ÍĞ%”0 ÍĞ&”1 ÍĞ'Ü ” ÍÑ
+” ÍÑ” ÍÑ” ÍÑ”$ ÍÑ”% ÍÑ”0 ÍÑ&”; ÍÑ1”ÌH ÍÑ>”ÌL ÍÑÌB”ÌM ÍÑÌC”ÌZ ÍÑÌP”Ì\ ÍÑÌR”Ì] ÍÑÌS”Ì^ ÍÑÌT”Ì_ ÍÑÌU‘” ÍÒ	–” ÍÓ” ÍÓ” ÍÓ	” ÍÓ” ÍÓ” ÍÓ”” ÍÔ”	 ÍÔ”
+ ÍÔ” ÍÔ’” ÍÕ” ÍÕ”” Í×
+”	 Í×”
+ Í×” Í×Ü ” ÍØ” ÍØ” ÍØ” ÍØ” ÍØ”" ÍØ”# ÍØ”% ÍØ!”& ÍØ"”0 ÍØ,”1 ÍØ-”8 ÍØ4”: ÍØ6”< ÍØ8”= ÍØ9”> ÍØ:”? ÍØ;’” ÍÙ” ÍÙ”” ÍÛ”	 ÍÛ”
+ ÍÛ” ÍÛœ” ÍÜ” ÍÜ” ÍÜ	” ÍÜ” ÍÜ” ÍÜ” ÍÜ”  ÍÜ”$ ÍÜ ”% ÍÜ!”+ ÍÜ'”- ÍÜ)œ” Íİ” Íİ” Íİ” Íİ” Íİ” Íİ” Íİ”- Íİ'”/ Íİ)”8 Íİ2”9 Íİ3”: Íİ4’” ÍŞ” ÍŞ‘”	 Íß’” Íá” Íá™” Íâ” Íâ” Íâ” Íâ” Íâ” Íâ”" Íâ”$ Íâ”% Íâœ” Íã” Íã” Íã” Íã” Íã” Íã” Íã”- Íã'”/ Íã)”6 Íã0”7 Íã1”8 Íã2‘”	 Íä”” Íä” Íä” Íä” Íä–” Íå” Íå” Íå” Íå” Íå&” Íå'Ü ” Íæ” Íæ” Íæ” Íæ” Íæ” Íæ”  Íæ”. Íæ(”0 Íæ*”; Íæ5”< Íæ6”= Íæ7”ÌD Íæ>”ÌF ÍæÌ@”ÌG ÍæÌA”ÌH ÍæÌBš” Íç” Íç” Íç” Íç” Íç” Íç” Íç”% Íç”& Íç ”' Íç!‘”	 Íè’” Íé” Íé”” Íë” Íë” Íë” Íë(™” Íì” Íì” Íì	”" Íì”% Íì!”. Íì*”/ Íì+”< Íì8”= Íì9™” Íí” Íí” Íí	”! Íí”$ Íí ”- Íí)”. Íí*”: Íí6”; Íí7™” Íî” Íî” Íî	”  Íî”# Íî”, Íî(”- Íî)”8 Íî4”9 Íî5™” Íï” Íï” Íï	”# Íï”& Íï"”/ Íï+”0 Íï,”> Íï:”? Íï;™” Íğ” Íğ” Íğ	” Íğ” Íğ”( Íğ$”) Íğ%”0 Íğ,”1 Íğ-™” Íñ” Íñ” Íñ	” Íñ”! Íñ”* Íñ&”+ Íñ'”4 Íñ0”5 Íñ1’” Íò” Íò’” Íô” Íô”” Íõ”	 Íõ”
+ Íõ” Íõ’” Íö” Íö–” Í÷” Í÷
+” Í÷” Í÷”" Í÷”$ Í÷™” Íø” Íø” Íø” Íø”( Íø ”) Íø!”0 Íø(”2 Íø*”3 Íø+—” Íù” Íù” Íù”" Íù”% Íù”) Íù!”* Íù"‘” Íú–” Íû” Íû
+” Íû” Íû” Íû” Íû™” Íü” Íü” Íü” Íü”# Íü”$ Íü”+ Íü#”- Íü%”. Íü&—” Íı” Íı” Íı” Íı”  Íı”$ Íı”% Íı‘” Íş–” Íÿ” Íÿ
+” Íÿ” Íÿ” Íÿ” Íÿ™” Í ” Í ” Í ” Í ”! Í ”" Í ”) Í !”+ Í #”, Í $—” Í” Í” Í” Í” Í”" Í”# Í‘” Íœ” Í” Í” Í” Í” Í” Í” Í”- Í'”/ Í)”: Í4”; Í5”< Í6‘”	 Í”” Í” Í” Í” Íœ” Í” Í” Í” Í” Í” Í”  Í”. Í(”0 Í*”8 Í2”9 Í3”: Í4‘”	 Í’” Í” Í‘” ÍÔrI–§version¤file§sources®sourcesContent¥names¨mappingsÀ‘À‘ÀÜÌ‘”    ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”  	 ‘”  
+ ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”   ‘”    ‘”  ! ‘”  " ‘”  # ‘”  $ ‘”  % ‘”  & ‘”  ' ‘”  ( ‘”  ) ‘”  * ‘”  + ‘”  , ‘”  - ‘”  . ‘”  / ‘”  0 ‘”  1 ‘”  2 ‘”  3 ‘”  4 ‘”  5 ‘”  6 ‘”  7 ‘”  8 ‘”  9 ‘”  : ‘”  ; ‘”  < ‘”  = ‘”  > ‘”  ? ‘”  Ì@ ‘”  ÌA ‘”  ÌB ‘”  ÌC ‘”  ÌD ‘”  ÌE ‘”  ÌF ‘”  ÌG ‘”  ÌH ‘”  ÌI ‘”  ÌJ ‘”  ÌK ‘”  ÌL ‘”  ÌM ‘”  ÌN ‘”  ÌO ‘”  ÌP ‘”  ÌQ ‘”  ÌR ‘”  ÌS ‘”  ÌT ‘”  ÌU ‘”  ÌV ‘”  ÌW ‘”  ÌX ‘”  ÌY ‘”  ÌZ ‘”  Ì[ ‘”  Ì\ ‘”  Ì] ‘”  Ì^ ‘”  Ì_ ‘”  Ì` ‘”  Ìa ‘”  Ìb ‘”  Ìc ‘”  Ìd ‘”  Ìe ‘”  Ìf ‘”  Ìg ‘”  Ìh ‘”  Ìi ‘”  Ìj ‘”  Ìk ‘”  Ìl ‘”  Ìm ‘”  Ìn ‘”  Ìo ‘”  Ìp ‘”  Ìq ‘”  Ìr ‘”  Ìs ‘”  Ìt ‘”  Ìu ‘”  Ìv ‘”  Ìw ‘”  Ìx ‘”  Ìy ‘”  Ìz ‘”  Ì{ ‘”  Ì| ‘”  Ì} ‘”  Ì~ ‘”  Ì ‘”  Ì€ ‘”  Ì ‘”  Ì‚ ‘”  Ìƒ ‘”  Ì„ ‘”  Ì… ‘”  Ì† ‘”  Ì‡ ‘”  Ìˆ ‘”  Ì‰ ‘”  ÌŠ ‘”  Ì‹ ‘”  ÌŒ ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì ‘”  Ì‘ ‘”  Ì’ ‘”  Ì“ ‘”  Ì” ‘”  Ì• ‘”  Ì– ‘”  Ì— ‘”  Ì˜ ‘”  Ì™ ‘”  Ìš ‘”  Ì› ‘”  Ìœ ‘”  Ì ‘”  Ì ‘”  ÌŸ ‘”  Ì  ‘”  Ì¡ ‘”  Ì¢ ‘”  Ì£ ‘”  Ì¤ ‘”  Ì¥ ‘”  Ì¦ ‘”  Ì§ ‘”  Ì¨ ‘”  Ì© ‘”  Ìª ‘”  Ì« ‘”  Ì¬ ‘”  Ì­ ‘”  Ì® ‘”  Ì¯ ‘”  Ì° ‘”  Ì± ‘”  Ì² ‘”  Ì³ ‘”  Ì´ ‘”  Ìµ ‘”  Ì¶ ‘”  Ì· ‘”  Ì¸ ‘”  Ì¹ ‘”  Ìº ‘”  Ì» ‘”  Ì¼ ‘”  Ì½ ‘”  Ì¾ ‘”  Ì¿ ‘”  ÌÀ ‘”  ÌÁ ‘”  ÌÂ ‘”  ÌÃ ‘”  ÌÄ ‘”  ÌÅ ‘”  ÌÆ ‘”  ÌÇ ‘”  ÌÈ ‘”  ÌÉ ‘”  ÌÊ ‘”  ÌË ‘”  ÌÌ ‘”  ÌÍ ‘”  ÌÎ ‘”  ÌÏ ‘”  ÌĞ ‘”  ÌÑ ‘”  ÌÒ ‘”  ÌÓ ‘”  ÌÔ ‘”  ÌÕ ‘”  ÌÖ ‘”  Ì× ‘”  ÌØ ‘”  ÌÙ ‘”  ÌÚ ‘”  ÌÛ ‘”  ÌÜ ‘”  Ìİ ‘”  ÌŞ ‘”  Ìß ‘”  Ìà ‘”  Ìá ‘”  Ìâ ‘”  Ìã ‘”  Ìä ‘”  Ìå ‘”  Ìæ ‘”  Ìç ‘”  Ìè ‘”  Ìé ‘”  Ìê ‘”  Ìë ‘”  Ìì ‘”  Ìí ‘”  Ìî ‘”  Ìï ‘”  Ìğ ‘”  Ìñ ‘”  Ìò ‘”  Ìó ‘”  Ìô ‘”  Ìõ ‘”  Ìö ‘”  Ì÷ ‘”  Ìø ‘”  Ìù ‘”  Ìú ‘”  Ìû ‘”  Ìü ‘”  Ìı ‘”  Ìş ‘”  Ìÿ ‘”  Í  ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í	 ‘”  Í
+ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í  ‘”  Í! ‘”  Í" ‘”  Í# ‘”  Í$ ‘”  Í% ‘”  Í& ‘”  Í' ‘”  Í( ‘”  Í) ‘”  Í* ‘”  Í+ ‘”  Í, ‘”  Í- ‘”  Í. ‘”  Í/ ‘”  Í0 ‘”  Í1 ‘”  Í2 ‘”  Í3 ‘”  Í4 ‘”  Í5 ‘”  Í6 ‘”  Í7 ‘”  Í8 ‘”  Í9 ‘”  Í: ‘”  Í; ‘”  Í< ‘”  Í= ‘”  Í> ‘”  Í? ‘”  Í@ ‘”  ÍA ‘”  ÍB ‘”  ÍC ‘”  ÍD ‘”  ÍE ‘”  ÍF ‘”  ÍG ‘”  ÍH ‘”  ÍI ‘”  ÍJ ‘”  ÍK ‘”  ÍL ‘”  ÍM ‘”  ÍN ‘”  ÍO ‘”  ÍP ‘”  ÍQ ‘”  ÍR ‘”  ÍS ‘”  ÍT ‘”  ÍU ‘”  ÍV ‘”  ÍW ‘”  ÍX ‘”  ÍY ‘”  ÍZ ‘”  Í[ ‘”  Í\ ‘”  Í] ‘”  Í^ ‘”  Í_ ‘”  Í` ‘”  Ía ‘”  Íb ‘”  Íc ‘”  Íd ‘”  Íe ‘”  Íf ‘”  Íg ‘”  Íh ‘”  Íi ‘”  Íj ‘”  Ík ‘”  Íl ‘”  Ím ‘”  Ín ‘”  Ío ‘”  Íp ‘”  Íq ‘”  Ír ‘”  Ís ‘”  Ít ‘”  Íu ‘”  Ív ‘”  Íw ‘”  Íx ‘”  Íy ‘”  Íz ‘”  Í{ ‘”  Í| ‘”  Í} ‘”  Í~ ‘”  Í ‘”  Í€ ‘”  Í ‘”  Í‚ ‘”  Íƒ ‘”  Í„ ‘”  Í… ‘”  Í† ‘”  Í‡ ‘”  Íˆ ‘”  Í‰ ‘”  ÍŠ ‘”  Í‹ ‘”  ÍŒ ‘”  Í ‘”  Í ‘”  Í ‘”  Í ‘”  Í‘ ‘”  Í’ ‘”  Í“ ‘”  Í” ‘”  Í• ‘”  Í– ‘”  Í— ‘”  Í˜ ‘”  Í™ ‘”  Íš ‘”  Í› ‘”  Íœ ‘”  Í ‘”  Í ‘”  ÍŸ ‘”  Í  ‘”  Í¡ ‘”  Í¢ ‘”  Í£ ‘”  Í¤ ‘”  Í¥ ‘”  Í¦ ‘”  Í§ ‘”  Í¨ ‘”  Í© ‘”  Íª ‘”  Í« ‘”  Í¬ ‘”  Í­ ‘”  Í® ‘”  Í¯ ‘”  Í° ‘”  Í± ‘”  Í² ‘”  Í³ ‘”  Í´ ‘”  Íµ ‘”  Í¶ ‘”  Í· ‘”  Í¸ ‘”  Í¹ ‘”  Íº ‘”  Í» ‘”  Í¼ ‘”  Í½ ‘”  Í¾ ‘”  Í¿ ‘”  ÍÀ ‘”  ÍÁ ‘”  ÍÂ ‘”  ÍÃ ‘”  ÍÄ ‘”  ÍÅ ‘”  ÍÆ ‘”  ÍÇ ‘”  ÍÈ ‘”  ÍÉ ‘”  ÍÊ ‘”  ÍË ÔrJ’§missing¦pluginÃ¦genAbcÂÔ  ÔrK”²dynamicImportCache¹exportAllDeclarationCache»exportNamedDeclarationCache«importCache‘ÔrL–¤type¥start£end«declarationªspecifiers¦source¶ExportNamedDeclarationÌÕÍD™ÔrM–¤type¥start£end¢idªsuperClass¤body°ClassDeclarationÌÜÍD™ÔrN”¤type¥start£end¤nameªIdentifierÌâÌî¬AudioManagerÀÔrO”¤type¥start£end¤body©ClassBodyÌïÍD™ŸÔrP˜¤type¥start£end¦static¨computed£key¤kind¥value°MethodDefinitionÌöÍÙÂÂNªIdentifierÌöÍ«constructor«constructorÔrQ™¤type¥start£end¢idªexpression©generator¥async¦params¤body²FunctionExpressionÍÍÙÀÂÂÂO®BlockStatementÍÍÙœÔrR”¤type¥start£endªexpression³ExpressionStatementÍÍ$ÔrS–¤type¥start£end¨operator¤left¥right´AssignmentExpressionÍÍ#¡=ÔrT—¤type¥start£end¦object¨property¨computed¨optional°MemberExpressionÍÍÔrU“¤type¥start£end®ThisExpressionÍÍNªIdentifierÍÍ¨recorderÂÂÔrV•¤type¥start£end¥value£raw§LiteralÍÍ#À¤nullR³ExpressionStatementÍ.ÍAS´AssignmentExpressionÍ.Í@¡=T°MemberExpressionÍ.Í9U®ThisExpressionÍ.Í2NªIdentifierÍ3Í9¦playerÂÂV§LiteralÍ<Í@À¤nullR³ExpressionStatementÍKÍeS´AssignmentExpressionÍKÍd¡=T°MemberExpressionÍKÍ]U®ThisExpressionÍKÍONªIdentifierÍPÍ]­audioCapturerÂÂV§LiteralÍ`ÍdÀ¤nullR³ExpressionStatementÍoÍˆS´AssignmentExpressionÍoÍ‡¡=T°MemberExpressionÍoÍU®ThisExpressionÍoÍsNªIdentifierÍtÍ«isCapturingÂÂV§LiteralÍ‚Í‡Â¥falseR³ExpressionStatementÍ’Í«S´AssignmentExpressionÍ’Íª¡=T°MemberExpressionÍ’Í¢U®ThisExpressionÍ’Í–NªIdentifierÍ—Í¢«isRecordingÂÂV§LiteralÍ¥ÍªÂ¥falseR³ExpressionStatementÍµÍÌS´AssignmentExpressionÍµÍË¡=T°MemberExpressionÍµÍÃU®ThisExpressionÍµÍ¹NªIdentifierÍºÍÃ©isPlayingÂÂV§LiteralÍÆÍËÂ¥falseR³ExpressionStatementÍÖÍñS´AssignmentExpressionÍÖÍğ¡=T°MemberExpressionÍÖÍëU®ThisExpressionÍÖÍÚNªIdentifierÍÛÍë°currentAudioPathÂÂV§LiteralÍîÍğ ¢''R³ExpressionStatementÍûÍS´AssignmentExpressionÍûÍ¡=T°MemberExpressionÍûÍU®ThisExpressionÍûÍÿNªIdentifierÍ Í¯recordStartTimeÂÂV§LiteralÍÍ ¡0R³ExpressionStatementÍÍ8S´AssignmentExpressionÍÍ7¡=T°MemberExpressionÍÍ.U®ThisExpressionÍÍ"NªIdentifierÍ#Í.«playerStateÂÂV§LiteralÍ1Í7¤idle¦'idle'R³ExpressionStatementÍBÍ^S´AssignmentExpressionÍBÍ]¡=T°MemberExpressionÍBÍTU®ThisExpressionÍBÍFNªIdentifierÍGÍT­recorderStateÂÂV§LiteralÍWÍ]¤idle¦'idle'R³ExpressionStatementÍ‚Í¦S´AssignmentExpressionÍ‚Í¥¡=T°MemberExpressionÍ‚ÍU®ThisExpressionÍ‚Í†NªIdentifierÍ‡Í¶isRecorderInitializingÂÂV§LiteralÍ Í¥Â¥falseR³ExpressionStatementÍ°ÍÒS´AssignmentExpressionÍ°ÍÑ¡=T°MemberExpressionÍ°ÍÉU®ThisExpressionÍ°Í´NªIdentifierÍµÍÉ´isPlayerInitializingÂÂV§LiteralÍÌÍÑÂ¥falseP°MethodDefinitionÍßÍÃÂNªIdentifierÍæÍñ«getInstance¦methodQ²FunctionExpressionÍñÍÀÂÂÂO®BlockStatementÍôÍ’ÔrW–¤type¥start£end¤testªconsequent©alternate«IfStatementÍÿÍ`ÔrX–¤type¥start£end¨operator¦prefix¨argument¯UnaryExpressionÍÍ¡!ÃT°MemberExpressionÍÍNªIdentifierÍÍ¬AudioManagerNªIdentifierÍÍ¨instanceÂÂO®BlockStatementÍÍ`‘R³ExpressionStatementÍ*ÍUS´AssignmentExpressionÍ*ÍT¡=T°MemberExpressionÍ*Í?NªIdentifierÍ*Í6¬AudioManagerNªIdentifierÍ7Í?¨instanceÂÂÔrY•¤type¥start£end¦callee©arguments­NewExpressionÍBÍTNªIdentifierÍFÍR¬AudioManagerÀÔrZ”¤type¥start£end¨argument¯ReturnStatementÍjÍ‡T°MemberExpressionÍqÍ†NªIdentifierÍqÍ}¬AudioManagerNªIdentifierÍ~Í†¨instanceÂÂP°MethodDefinitionÍ”Í	>ÂÂNªIdentifierÍšÍ¦¬initRecorder¦methodQ²FunctionExpressionÍ¦Í	>ÀÂÂÃO®BlockStatementÍ©Í	>“W«IfStatementÍÈÍKT°MemberExpressionÍÌÍçU®ThisExpressionÍÌÍĞNªIdentifierÍÑÍç¶isRecorderInitializingÂÂO®BlockStatementÍéÍK’R³ExpressionStatementÍøÍ+Ôr[–¤type¥start£end¦callee©arguments¨optional®CallExpressionÍøÍ*T°MemberExpressionÍøÍNªIdentifierÍøÍı¥hilogNªIdentifierÍşÍ¤infoÂÂ“V§LiteralÍÍ	 ¦0x0000V§LiteralÍÍ¬AudioManager®'AudioManager'V§LiteralÍÍ)Ù$å½•éŸ³å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡Ù&'å½•éŸ³å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡'ÂZ¯ReturnStatementÍ9Í@ÀÀW«IfStatementÍUÍìÔr\–¤type¥start£end¤left¨operator¥right±LogicalExpressionÍYÍ‹T°MemberExpressionÍYÍfU®ThisExpressionÍYÍ]NªIdentifierÍ^Íf¨recorderÂÂ¢&&\°BinaryExpressionÍjÍ‹T°MemberExpressionÍjÍ|U®ThisExpressionÍjÍnNªIdentifierÍoÍ|­recorderStateÂÂ£!==V§LiteralÍÍ‹¨releasedª'released'O®BlockStatementÍÍì’R³ExpressionStatementÍœÍÌ[®CallExpressionÍœÍËT°MemberExpressionÍœÍ¦NªIdentifierÍœÍ¡¥hilogNªIdentifierÍ¢Í¦¤infoÂÂ“V§LiteralÍ§Í­ ¦0x0000V§LiteralÍ¯Í½¬AudioManager®'AudioManager'V§LiteralÍ¿ÍÊ»å½•éŸ³å™¨å·²å­˜åœ¨ä¸”å¯ç”¨½'å½•éŸ³å™¨å·²å­˜åœ¨ä¸”å¯ç”¨'ÂZ¯ReturnStatementÍÚÍáÀÀÔr]–¤type¥start£end¥block§handler©finalizer¬TryStatementÍöÍ	7O®BlockStatementÍúÍÚ–R³ExpressionStatementÍ	Í,S´AssignmentExpressionÍ	Í+¡=T°MemberExpressionÍ	Í$U®ThisExpressionÍ	ÍNªIdentifierÍÍ$¶isRecorderInitializingÂÂV§LiteralÍ'Í+Ã¤trueW«IfStatementÍVÍOT°MemberExpressionÍZÍgU®ThisExpressionÍZÍ^NªIdentifierÍ_Íg¨recorderÂÂO®BlockStatementÍiÍO‘]¬TryStatementÍ|Í@O®BlockStatementÍ€ÍÈ‘R³ExpressionStatementÍ—ÍµZ¯AwaitExpressionÍ—Í´[®CallExpressionÍÍ´T°MemberExpressionÍÍ²T°MemberExpressionÍÍªU®ThisExpressionÍÍ¡NªIdentifierÍ¢Íª¨recorderÂÂNªIdentifierÍ«Í²§releaseÂÂÂÔr^•¤type¥start£end¥param¤body«CatchClauseÍÚÍ@NªIdentifierÍáÍâ¡eO®BlockStatementÍäÍ@‘R³ExpressionStatementÍûÍ-[®CallExpressionÍûÍ,T°MemberExpressionÍûÍNªIdentifierÍûÍ ¥hilogNªIdentifierÍÍ¤warnÂÂ“V§LiteralÍÍ ¦0x0000V§LiteralÍÍ¬AudioManager®'AudioManager'V§LiteralÍÍ+Ù!é‡Šæ”¾æ—§å½•éŸ³å™¨å¤±è´¥ï¼Œç»§ç»­Ù#'é‡Šæ”¾æ—§å½•éŸ³å™¨å¤±è´¥ï¼Œç»§ç»­'ÂÀÀR³ExpressionStatementÍ]ÍŒS´AssignmentExpressionÍ]Í‹¡=T°MemberExpressionÍ]ÍjU®ThisExpressionÍ]ÍaNªIdentifierÍbÍj¨recorderÂÂZ¯AwaitExpressionÍmÍ‹[®CallExpressionÍsÍ‹T°MemberExpressionÍsÍ‰NªIdentifierÍsÍx¥mediaNªIdentifierÍyÍ‰°createAVRecorderÂÂÂR³ExpressionStatementÍšÍ¶S´AssignmentExpressionÍšÍµ¡=T°MemberExpressionÍšÍ¬U®ThisExpressionÍšÍNªIdentifierÍŸÍ¬­recorderStateÂÂV§LiteralÍ¯Íµ¤idle¦'idle'R³ExpressionStatementÍŞÍ’[®CallExpressionÍŞÍ‘T°MemberExpressionÍŞÍîT°MemberExpressionÍŞÍëU®ThisExpressionÍŞÍâNªIdentifierÍãÍë¨recorderÂÂNªIdentifierÍìÍî¢onÂÂ’V§LiteralÍïÍü«stateChange­'stateChange'Q·ArrowFunctionExpressionÍşÍÀÂÂÂ‘NªIdentifierÍÿÍ¥stateO®BlockStatementÍ	Í’R³ExpressionStatementÍÍT[®CallExpressionÍÍST°MemberExpressionÍÍ&NªIdentifierÍÍ!¥hilogNªIdentifierÍ"Í&¤infoÂÂ“V§LiteralÍ'Í- ¦0x0000V§LiteralÍ/Í=¬AudioManager®'AudioManager'Ôr_•¤type¥start£end«expressions¦quasis¯TemplateLiteralÍ?ÍR‘NªIdentifierÍKÍP¥state’Ôr`•¤type¥start£end¥value¤tail¯TemplateElementÍ@ÍIÔra’£raw¦cooked·å½•éŸ³å™¨çŠ¶æ€å˜åŒ–: ·å½•éŸ³å™¨çŠ¶æ€å˜åŒ–: Â`¯TemplateElementÍQÍQa  ÃÂR³ExpressionStatementÍfÍS´AssignmentExpressionÍfÍ€¡=T°MemberExpressionÍfÍxU®ThisExpressionÍfÍjNªIdentifierÍkÍx­recorderStateÂÂNªIdentifierÍ{Í€¥stateÂR³ExpressionStatementÍ ÍÏ[®CallExpressionÍ ÍÎT°MemberExpressionÍ ÍªNªIdentifierÍ Í¥¥hilogNªIdentifierÍ¦Íª¤infoÂÂ“V§LiteralÍ«Í± ¦0x0000V§LiteralÍ³ÍÁ¬AudioManager®'AudioManager'V§LiteralÍÃÍÍ¸å½•éŸ³å™¨åˆå§‹åŒ–æˆåŠŸº'å½•éŸ³å™¨åˆå§‹åŒ–æˆåŠŸ'Â^«CatchClauseÍäÍçNªIdentifierÍëÍğ¥errorO®BlockStatementÍòÍç•Ôrb•¤type¥start£end¬declarations¤kind³VariableDeclarationÍÍ‘Ôrc•¤type¥start£end¢id¤init²VariableDeclaratorÍÍNªIdentifierÍÍ¡eNªIdentifierÍÍ¥error¥constb³VariableDeclarationÍÍI‘c²VariableDeclaratorÍ%ÍHNªIdentifierÍ%Í-¨errorMsg_¯TemplateLiteralÍ0ÍH‘T°MemberExpressionÍ=ÍFNªIdentifierÍ=Í>¡eNªIdentifierÍ?ÍF§messageÂÂ’`¯TemplateElementÍ1Í;aºå½•éŸ³å™¨åˆå§‹åŒ–å¤±è´¥: ºå½•éŸ³å™¨åˆå§‹åŒ–å¤±è´¥: Â`¯TemplateElementÍGÍGa  Ã¥constR³ExpressionStatementÍWÍ…[®CallExpressionÍWÍ„T°MemberExpressionÍWÍbNªIdentifierÍWÍ\¥hilogNªIdentifierÍ]Íb¥errorÂÂ“V§LiteralÍcÍi ¦0x0000V§LiteralÍkÍy¬AudioManager®'AudioManager'NªIdentifierÍ{Íƒ¨errorMsgÂR³ExpressionStatementÍ“Í´R¯ChainExpressionÍ“Í³[®CallExpressionÍ“Í³T°MemberExpressionÍ“Í§U®ThisExpressionÍ“Í—NªIdentifierÍ˜Í§¯onErrorCallbackÂÂ‘NªIdentifierÍªÍ²¨errorMsgÃZ®ThrowStatementÍÂÍÜY­NewExpressionÍÈÍÛNªIdentifierÍÌÍÑ¥Error‘NªIdentifierÍÒÍÚ¨errorMsgO®BlockStatementÍùÍ	7‘R³ExpressionStatementÍ	Í	,S´AssignmentExpressionÍ	Í	+¡=T°MemberExpressionÍ	Í	#U®ThisExpressionÍ	Í	NªIdentifierÍ	Í	#¶isRecorderInitializingÂÂV§LiteralÍ	&Í	+Â¥falseP°MethodDefinitionÍ	DÍbÂÂNªIdentifierÍ	JÍ	TªinitPlayer¦methodQ²FunctionExpressionÍ	TÍbÀÂÂÃO®BlockStatementÍ	WÍb“W«IfStatementÍ	vÍ	÷T°MemberExpressionÍ	zÍ	“U®ThisExpressionÍ	zÍ	~NªIdentifierÍ	Í	“´isPlayerInitializingÂÂO®BlockStatementÍ	•Í	÷’R³ExpressionStatementÍ	¤Í	×[®CallExpressionÍ	¤Í	ÖT°MemberExpressionÍ	¤Í	®NªIdentifierÍ	¤Í	©¥hilogNªIdentifierÍ	ªÍ	®¤infoÂÂ“V§LiteralÍ	¯Í	µ ¦0x0000V§LiteralÍ	·Í	Å¬AudioManager®'AudioManager'V§LiteralÍ	ÇÍ	ÕÙ$æ’­æ”¾å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡Ù&'æ’­æ”¾å™¨æ­£åœ¨åˆå§‹åŒ–ä¸­ï¼Œè·³è¿‡'ÂZ¯ReturnStatementÍ	åÍ	ìÀÀW«IfStatementÍ
+Í
+É\±LogicalExpressionÍ
+#Í
+QT°MemberExpressionÍ
+#Í
+.U®ThisExpressionÍ
+#Í
+'NªIdentifierÍ
+(Í
+.¦playerÂÂ¢&&\°BinaryExpressionÍ
+2Í
+QT°MemberExpressionÍ
+2Í
+BU®ThisExpressionÍ
+2Í
+6NªIdentifierÍ
+7Í
+B«playerStateÂÂ£!==V§LiteralÍ
+GÍ
+Q¨releasedª'released'O®BlockStatementÍ
+SÍ
+É’R³ExpressionStatementÍ
+bÍ
+©[®CallExpressionÍ
+bÍ
+¨T°MemberExpressionÍ
+bÍ
+lNªIdentifierÍ
+bÍ
+g¥hilogNªIdentifierÍ
+hÍ
+l¤infoÂÂ“V§LiteralÍ
+mÍ
+s ¦0x0000V§LiteralÍ
+uÍ
+ƒ¬AudioManager®'AudioManager'_¯TemplateLiteralÍ
+…Í
+§‘T°MemberExpressionÍ
+•Í
+¥U®ThisExpressionÍ
+•Í
+™NªIdentifierÍ
+šÍ
+¥«playerStateÂÂ’`¯TemplateElementÍ
+†Í
+“aÙ#æ’­æ”¾å™¨å·²å­˜åœ¨ï¼Œå½“å‰çŠ¶æ€: Ù#æ’­æ”¾å™¨å·²å­˜åœ¨ï¼Œå½“å‰çŠ¶æ€: Â`¯TemplateElementÍ
+¦Í
+¦a  ÃÂZ¯ReturnStatementÍ
+·Í
+¾ÀÀ]¬TryStatementÍ
+ÓÍ[O®BlockStatementÍ
+×Í —R³ExpressionStatementÍ
+æÍS´AssignmentExpressionÍ
+æÍ¡=T°MemberExpressionÍ
+æÍ
+ÿU®ThisExpressionÍ
+æÍ
+êNªIdentifierÍ
+ëÍ
+ÿ´isPlayerInitializingÂÂV§LiteralÍÍÃ¤trueW«IfStatementÍ1Í&T°MemberExpressionÍ5Í@U®ThisExpressionÍ5Í9NªIdentifierÍ:Í@¦playerÂÂO®BlockStatementÍBÍ&‘]¬TryStatementÍUÍO®BlockStatementÍYÍŸ‘R³ExpressionStatementÍpÍŒZ¯AwaitExpressionÍpÍ‹[®CallExpressionÍvÍ‹T°MemberExpressionÍvÍ‰T°MemberExpressionÍvÍU®ThisExpressionÍvÍzNªIdentifierÍ{Í¦playerÂÂNªIdentifierÍ‚Í‰§releaseÂÂÂ^«CatchClauseÍ±ÍNªIdentifierÍ¸Í¹¡eO®BlockStatementÍ»Í‘R³ExpressionStatementÍÒÍ[®CallExpressionÍÒÍT°MemberExpressionÍÒÍÜNªIdentifierÍÒÍ×¥hilogNªIdentifierÍØÍÜ¤warnÂÂ“V§LiteralÍİÍã ¦0x0000V§LiteralÍåÍó¬AudioManager®'AudioManager'V§LiteralÍõÍÙ!é‡Šæ”¾æ—§æ’­æ”¾å™¨å¤±è´¥ï¼Œç»§ç»­Ù#'é‡Šæ”¾æ—§æ’­æ”¾å™¨å¤±è´¥ï¼Œç»§ç»­'ÂÀÀR³ExpressionStatementÍ4Í_S´AssignmentExpressionÍ4Í^¡=T°MemberExpressionÍ4Í?U®ThisExpressionÍ4Í8NªIdentifierÍ9Í?¦playerÂÂZ¯AwaitExpressionÍBÍ^[®CallExpressionÍHÍ^T°MemberExpressionÍHÍ\NªIdentifierÍHÍM¥mediaNªIdentifierÍNÍ\®createAVPlayerÂÂÂR³ExpressionStatementÍmÍ‡S´AssignmentExpressionÍmÍ†¡=T°MemberExpressionÍmÍ}U®ThisExpressionÍmÍqNªIdentifierÍrÍ}«playerStateÂÂV§LiteralÍ€Í†¤idle¦'idle'R³ExpressionStatementÍ•Í£[®CallExpressionÍ•Í¢T°MemberExpressionÍ•Í£T°MemberExpressionÍ•Í U®ThisExpressionÍ•Í™NªIdentifierÍšÍ ¦playerÂÂNªIdentifierÍ¡Í£¢onÂÂ’V§LiteralÍ¤Í±«stateChange­'stateChange'Q·ArrowFunctionExpressionÍ³Í¡ÀÂÂÂ‘NªIdentifierÍ´Í¹¥stateO®BlockStatementÍ¾Í¡“R³ExpressionStatementÍÑÍ	[®CallExpressionÍÑÍT°MemberExpressionÍÑÍÛNªIdentifierÍÑÍÖ¥hilogNªIdentifierÍ×ÍÛ¤infoÂÂ“V§LiteralÍÜÍâ ¦0x0000V§LiteralÍäÍò¬AudioManager®'AudioManager'_¯TemplateLiteralÍôÍ‘NªIdentifierÍ Í¥state’`¯TemplateElementÍõÍşa·æ’­æ”¾å™¨çŠ¶æ€å˜åŒ–: ·æ’­æ”¾å™¨çŠ¶æ€å˜åŒ–: Â`¯TemplateElementÍÍa  ÃÂR³ExpressionStatementÍÍ4S´AssignmentExpressionÍÍ3¡=T°MemberExpressionÍÍ+U®ThisExpressionÍÍNªIdentifierÍ Í+«playerStateÂÂNªIdentifierÍ.Í3¥stateW«IfStatementÍFÍ’\±LogicalExpressionÍJÍv\°BinaryExpressionÍJÍ_NªIdentifierÍJÍO¥state£===V§LiteralÍTÍ_©completed«'completed'¢||\°BinaryExpressionÍcÍvNªIdentifierÍcÍh¥state£===V§LiteralÍmÍv§stopped©'stopped'O®BlockStatementÍxÍï’R³ExpressionStatementÍÍ¦S´AssignmentExpressionÍÍ¥¡=T°MemberExpressionÍÍU®ThisExpressionÍÍ“NªIdentifierÍ”Í©isPlayingÂÂV§LiteralÍ Í¥Â¥falseR³ExpressionStatementÍ¼ÍÜR¯ChainExpressionÍ¼ÍÛ[®CallExpressionÍ¼ÍÛT°MemberExpressionÍ¼Í×U®ThisExpressionÍ¼ÍÀNªIdentifierÍÁÍ×¶onPlayCompleteCallbackÂÂÃW«IfStatementÍÍ’\°BinaryExpressionÍ
+ÍNªIdentifierÍ
+Í¥state£===V§LiteralÍÍ§playing©'playing'O®BlockStatementÍÍ’’R³ExpressionStatementÍ6ÍLS´AssignmentExpressionÍ6ÍK¡=T°MemberExpressionÍ6ÍDU®ThisExpressionÍ6Í:NªIdentifierÍ;ÍD©isPlayingÂÂV§LiteralÍGÍKÃ¤trueR³ExpressionStatementÍbÍR¯ChainExpressionÍbÍ~[®CallExpressionÍbÍ~T°MemberExpressionÍbÍzU®ThisExpressionÍbÍfNªIdentifierÍgÍz³onPlayStartCallbackÂÂÃÀÂR³ExpressionStatementÍ±Í¸[®CallExpressionÍ±Í·T°MemberExpressionÍ±Í¿T°MemberExpressionÍ±Í¼U®ThisExpressionÍ±ÍµNªIdentifierÍ¶Í¼¦playerÂÂNªIdentifierÍ½Í¿¢onÂÂ’V§LiteralÍÀÍÇ¥error§'error'Q·ArrowFunctionExpressionÍÉÍ¶ÀÂÂÂ‘NªIdentifierÍÊÍÍ£errO®BlockStatementÍÒÍ¶”b³VariableDeclarationÍåÍó‘c²VariableDeclaratorÍëÍòNªIdentifierÍëÍì¡eNªIdentifierÍïÍò£err¥constR³ExpressionStatementÍÍS´AssignmentExpressionÍÍ¡=T°MemberExpressionÍÍU®ThisExpressionÍÍ	NªIdentifierÍ
+Í©isPlayingÂÂV§LiteralÍÍÂ¥falseR³ExpressionStatementÍ.Íh[®CallExpressionÍ.ÍgT°MemberExpressionÍ.Í9NªIdentifierÍ.Í3¥hilogNªIdentifierÍ4Í9¥errorÂÂ“V§LiteralÍ:Í@ ¦0x0000V§LiteralÍBÍP¬AudioManager®'AudioManager'_¯TemplateLiteralÍRÍf‘T°MemberExpressionÍ[ÍdNªIdentifierÍ[Í\¡eNªIdentifierÍ]Íd§messageÂÂ’`¯TemplateElementÍSÍYa®æ’­æ”¾é”™è¯¯: ®æ’­æ”¾é”™è¯¯: Â`¯TemplateElementÍeÍea  ÃÂR³ExpressionStatementÍzÍ§R¯ChainExpressionÍzÍ¦[®CallExpressionÍzÍ¦T°MemberExpressionÍzÍU®ThisExpressionÍzÍ~NªIdentifierÍÍ¯onErrorCallbackÂÂ‘\°BinaryExpressionÍ‘Í¥V§LiteralÍ‘Í™®æ’­æ”¾å¤±è´¥: °'æ’­æ”¾å¤±è´¥: '¡+T°MemberExpressionÍœÍ¥NªIdentifierÍœÍ¡eNªIdentifierÍÍ¥§messageÂÂÃÂR³ExpressionStatementÍÆÍõ[®CallExpressionÍÆÍôT°MemberExpressionÍÆÍĞNªIdentifierÍÆÍË¥hilogNªIdentifierÍÌÍĞ¤infoÂÂ“V§LiteralÍÑÍ× ¦0x0000V§LiteralÍÙÍç¬AudioManager®'AudioManager'V§LiteralÍéÍó¸æ’­æ”¾å™¨åˆå§‹åŒ–æˆåŠŸº'æ’­æ”¾å™¨åˆå§‹åŒ–æˆåŠŸ'Â^«CatchClauseÍ
+ÍNªIdentifierÍÍ¥errorO®BlockStatementÍÍ•b³VariableDeclarationÍ'Í7‘c²VariableDeclaratorÍ-Í6NªIdentifierÍ-Í.¡eNªIdentifierÍ1Í6¥error¥constb³VariableDeclarationÍEÍo‘c²VariableDeclaratorÍKÍnNªIdentifierÍKÍS¨errorMsg_¯TemplateLiteralÍVÍn‘T°MemberExpressionÍcÍlNªIdentifierÍcÍd¡eNªIdentifierÍeÍl§messageÂÂ’`¯TemplateElementÍWÍaaºæ’­æ”¾å™¨åˆå§‹åŒ–å¤±è´¥: ºæ’­æ”¾å™¨åˆå§‹åŒ–å¤±è´¥: Â`¯TemplateElementÍmÍma  Ã¥constR³ExpressionStatementÍ}Í«[®CallExpressionÍ}ÍªT°MemberExpressionÍ}ÍˆNªIdentifierÍ}Í‚¥hilogNªIdentifierÍƒÍˆ¥errorÂÂ“V§LiteralÍ‰Í ¦0x0000V§LiteralÍ‘ÍŸ¬AudioManager®'AudioManager'NªIdentifierÍ¡Í©¨errorMsgÂR³ExpressionStatementÍ¹ÍÚR¯ChainExpressionÍ¹ÍÙ[®CallExpressionÍ¹ÍÙT°MemberExpressionÍ¹ÍÍU®ThisExpressionÍ¹Í½NªIdentifierÍ¾ÍÍ¯onErrorCallbackÂÂ‘NªIdentifierÍĞÍØ¨errorMsgÃZ®ThrowStatementÍèÍY­NewExpressionÍîÍNªIdentifierÍòÍ÷¥Error‘NªIdentifierÍøÍ ¨errorMsgO®BlockStatementÍÍ[‘R³ExpressionStatementÍ.ÍPS´AssignmentExpressionÍ.ÍO¡=T°MemberExpressionÍ.ÍGU®ThisExpressionÍ.Í2NªIdentifierÍ3ÍG´isPlayerInitializingÂÂV§LiteralÍJÍOÂ¥falseP°MethodDefinitionÍhÍWÂÂNªIdentifierÍnÍz¬initCapturer¦methodQ²FunctionExpressionÍzÍWÀÂÂÃO®BlockStatementÍ}ÍW’W«IfStatementÍˆÍT°MemberExpressionÍŒÍU®ThisExpressionÍŒÍNªIdentifierÍ‘Í­audioCapturerÂÂO®BlockStatementÍ Í’R³ExpressionStatementÍ¯Íç[®CallExpressionÍ¯ÍæT°MemberExpressionÍ¯Í¹NªIdentifierÍ¯Í´¥hilogNªIdentifierÍµÍ¹¤infoÂÂ“V§LiteralÍºÍÀ ¦0x0000V§LiteralÍÂÍĞ¬AudioManager®'AudioManager'V§LiteralÍÒÍå·AudioCapturer å·²å­˜åœ¨¹'AudioCapturer å·²å­˜åœ¨'ÂZ¯ReturnStatementÍõÍüÀÀ]¬TryStatementÍÍPO®BlockStatementÍÍ8•b³VariableDeclarationÍ$Íe‘c²VariableDeclaratorÍ*ÍdNªIdentifierÍ*Í9¯audioStreamInfoÔrd”¤type¥start£endªproperties°ObjectExpressionÍ<Íd”Ôre™¤type¥start£end¦method©shorthand¨computed£key¥value¤kind¨PropertyÍOÍ†ÂÂÂNªIdentifierÍOÍ[¬samplingRateT°MemberExpressionÍ]Í†T°MemberExpressionÍ]ÍtNªIdentifierÍ]Íb¥audioNªIdentifierÍcÍt±AudioSamplingRateÂÂNªIdentifierÍuÍ†±SAMPLE_RATE_16000ÂÂ¤inite¨PropertyÍ™Í¿ÂÂÂNªIdentifierÍ™Í¡¨channelsT°MemberExpressionÍ£Í¿T°MemberExpressionÍ£ÍµNªIdentifierÍ£Í¨¥audioNªIdentifierÍ©Íµ¬AudioChannelÂÂNªIdentifierÍ¶Í¿©CHANNEL_1ÂÂ¤inite¨PropertyÍÒÍÂÂÂNªIdentifierÍÒÍŞ¬sampleFormatT°MemberExpressionÍàÍT°MemberExpressionÍàÍ÷NªIdentifierÍàÍå¥audioNªIdentifierÍæÍ÷±AudioSampleFormatÂÂNªIdentifierÍøÍ³SAMPLE_FORMAT_S16LEÂÂ¤inite¨PropertyÍÍUÂÂÂNªIdentifierÍÍ*¬encodingTypeT°MemberExpressionÍ,ÍUT°MemberExpressionÍ,ÍCNªIdentifierÍ,Í1¥audioNªIdentifierÍ2ÍC±AudioEncodingTypeÂÂNªIdentifierÍDÍU±ENCODING_TYPE_RAWÂÂ¤init¥constb³VariableDeclarationÍsÍû‘c²VariableDeclaratorÍyÍúNªIdentifierÍyÍŠ±audioCapturerInfod°ObjectExpressionÍÍú’e¨PropertyÍ ÍÈÂÂÂNªIdentifierÍ Í¦¦sourceT°MemberExpressionÍ¨ÍÈT°MemberExpressionÍ¨Í¸NªIdentifierÍ¨Í­¥audioNªIdentifierÍ®Í¸ªSourceTypeÂÂNªIdentifierÍ¹ÍÈ¯SOURCE_TYPE_MICÂÂ¤inite¨PropertyÍÛÍëÂÂÂNªIdentifierÍÛÍè­capturerFlagsV§LiteralÍêÍë ¡0¤init¥constb³VariableDeclarationÍ	Í‘‘c²VariableDeclaratorÍÍNªIdentifierÍÍ¯capturerOptionsd°ObjectExpressionÍ!Í’e¨PropertyÍ4ÍOÂÂÂNªIdentifierÍ4Í>ªstreamInfoNªIdentifierÍ@ÍO¯audioStreamInfo¤inite¨PropertyÍbÍÂÂÂNªIdentifierÍbÍn¬capturerInfoNªIdentifierÍpÍ±audioCapturerInfo¤init¥constR³ExpressionStatementÍŸÍåS´AssignmentExpressionÍŸÍä¡=T°MemberExpressionÍŸÍ±U®ThisExpressionÍŸÍ£NªIdentifierÍ¤Í±­audioCapturerÂÂZ¯AwaitExpressionÍ´Íä[®CallExpressionÍºÍäT°MemberExpressionÍºÍÓNªIdentifierÍºÍ¿¥audioNªIdentifierÍÀÍÓ³createAudioCapturerÂÂ‘NªIdentifierÍÔÍã¯capturerOptionsÂR³ExpressionStatementÍóÍ-[®CallExpressionÍóÍ,T°MemberExpressionÍóÍıNªIdentifierÍóÍø¥hilogNªIdentifierÍùÍı¤infoÂÂ“V§LiteralÍşÍ ¦0x0000V§LiteralÍÍ¬AudioManager®'AudioManager'V§LiteralÍÍ+½AudioCapturer åˆå§‹åŒ–æˆåŠŸ¿'AudioCapturer åˆå§‹åŒ–æˆåŠŸ'Â^«CatchClauseÍBÍPNªIdentifierÍIÍN¥errorO®BlockStatementÍPÍP•b³VariableDeclarationÍ_Ío‘c²VariableDeclaratorÍeÍnNªIdentifierÍeÍf¡eNªIdentifierÍiÍn¥error¥constb³VariableDeclarationÍ}Í²‘c²VariableDeclaratorÍƒÍ±NªIdentifierÍƒÍ‹¨errorMsg_¯TemplateLiteralÍÍ±‘T°MemberExpressionÍ¦Í¯NªIdentifierÍ¦Í§¡eNªIdentifierÍ¨Í¯§messageÂÂ’`¯TemplateElementÍÍ¤a¿AudioCapturer åˆå§‹åŒ–å¤±è´¥: ¿AudioCapturer åˆå§‹åŒ–å¤±è´¥: Â`¯TemplateElementÍ°Í°a  Ã¥constR³ExpressionStatementÍÀÍî[®CallExpressionÍÀÍíT°MemberExpressionÍÀÍËNªIdentifierÍÀÍÅ¥hilogNªIdentifierÍÆÍË¥errorÂÂ“V§LiteralÍÌÍÒ ¦0x0000V§LiteralÍÔÍâ¬AudioManager®'AudioManager'NªIdentifierÍäÍì¨errorMsgÂR³ExpressionStatementÍüÍR¯ChainExpressionÍüÍ[®CallExpressionÍüÍT°MemberExpressionÍüÍU®ThisExpressionÍüÍ NªIdentifierÍÍ¯onErrorCallbackÂÂ‘NªIdentifierÍÍ¨errorMsgÃZ®ThrowStatementÍ+ÍEY­NewExpressionÍ1ÍDNªIdentifierÍ5Í:¥Error‘NªIdentifierÍ;ÍC¨errorMsgÀP°MethodDefinitionÍ]ÍÂÂNªIdentifierÍcÍq®startRecording¦methodQ²FunctionExpressionÍqÍÀÂÂÃ’NªIdentifierÍrÍ{©audioPathNªIdentifierÍ}Íƒ¦configO®BlockStatementÍ…Í’W«IfStatementÍÍT°MemberExpressionÍ”Í¤U®ThisExpressionÍ”Í˜NªIdentifierÍ™Í¤«isRecordingÂÂO®BlockStatementÍ¦Í’R³ExpressionStatementÍµÍâ[®CallExpressionÍµÍáT°MemberExpressionÍµÍ¿NªIdentifierÍµÍº¥hilogNªIdentifierÍ»Í¿¤warnÂÂ“V§LiteralÍÀÍÆ ¦0x0000V§LiteralÍÈÍÖ¬AudioManager®'AudioManager'V§LiteralÍØÍà²å·²ç»åœ¨å½•éŸ³ä¸­´'å·²ç»åœ¨å½•éŸ³ä¸­'ÂZ¯ReturnStatementÍğÍ÷ÀÀ]¬TryStatementÍÍ†O®BlockStatementÍÍTR³ExpressionStatementÍ<ÍVZ¯AwaitExpressionÍ<ÍU[®CallExpressionÍBÍUT°MemberExpressionÍBÍSU®ThisExpressionÍBÍFNªIdentifierÍGÍS¬initRecorderÂÂÂW«IfStatementÍÍ‹\°BinaryExpressionÍ‘Í®T°MemberExpressionÍ‘Í£U®ThisExpressionÍ‘Í•NªIdentifierÍ–Í£­recorderStateÂÂ£!==V§LiteralÍ¨Í®¤idle¦'idle'O®BlockStatementÍ°Í‹“R³ExpressionStatementÍÃÍ[®CallExpressionÍÃÍT°MemberExpressionÍÃÍÍNªIdentifierÍÃÍÈ¥hilogNªIdentifierÍÉÍÍ¤infoÂÂ“V§LiteralÍÎÍÔ ¦0x0000V§LiteralÍÖÍä¬AudioManager®'AudioManager'_¯TemplateLiteralÍæÍ‘T°MemberExpressionÍğÍU®ThisExpressionÍğÍôNªIdentifierÍõÍ­recorderStateÂÂ’`¯TemplateElementÍçÍîa³å½•éŸ³å™¨çŠ¶æ€ä¸º ³å½•éŸ³å™¨çŠ¶æ€ä¸º Â`¯TemplateElementÍÍa²ï¼Œæ­£åœ¨é‡ç½®...²ï¼Œæ­£åœ¨é‡ç½®...ÃÂR³ExpressionStatementÍ Í<Z¯AwaitExpressionÍ Í;[®CallExpressionÍ&Í;T°MemberExpressionÍ&Í9T°MemberExpressionÍ&Í3U®ThisExpressionÍ&Í*NªIdentifierÍ+Í3¨recorderÂÂNªIdentifierÍ4Í9¥resetÂÂÂR³ExpressionStatementÍNÍ|Z¯AwaitExpressionÍNÍ{[®CallExpressionÍTÍ{T°MemberExpressionÍTÍmU®ThisExpressionÍTÍXNªIdentifierÍYÍm´waitForRecorderStateÂÂ’V§LiteralÍnÍt¤idle¦'idle'V§LiteralÍvÍzÍĞ¤2000ÂÀb³VariableDeclarationÍ±Í‘c²VariableDeclaratorÍ·ÍNªIdentifierÍ·Í»¤fileZ¯AwaitExpressionÍ¾Í[®CallExpressionÍÄÍT°MemberExpressionÍÄÍËNªIdentifierÍÄÍÆ¢fsNªIdentifierÍÇÍË¤openÂÂ’NªIdentifierÍÌÍÕ©audioPath\°BinaryExpressionÍ×ÍT°MemberExpressionÍ×ÍíT°MemberExpressionÍ×ÍâNªIdentifierÍ×ÍÙ¢fsNªIdentifierÍÚÍâ¨OpenModeÂÂNªIdentifierÍãÍíªREAD_WRITEÂÂ¡|T°MemberExpressionÍğÍT°MemberExpressionÍğÍûNªIdentifierÍğÍò¢fsNªIdentifierÍóÍû¨OpenModeÂÂNªIdentifierÍüÍ¦CREATEÂÂÂ¥constb³VariableDeclarationÍ,Í<‘c²VariableDeclaratorÍ2Í;NªIdentifierÍ2Í?­defaultConfigd°ObjectExpressionÍBÍ;“e¨PropertyÍUÍ‘ÂÂÂNªIdentifierÍUÍd¯audioSourceTypeT°MemberExpressionÍfÍ‘T°MemberExpressionÍfÍ{NªIdentifierÍfÍk¥mediaNªIdentifierÍlÍ{¯AudioSourceTypeÂÂNªIdentifierÍ|Í‘µAUDIO_SOURCE_TYPE_MICÂÂ¤inite¨PropertyÍ¤ÍÂÂÂNªIdentifierÍ¤Í«§profiled°ObjectExpressionÍ­Í•e¨PropertyÍÄÍêÂÂÂNªIdentifierÍÄÍĞ¬audioBitrate\±LogicalExpressionÍÒÍêR¯ChainExpressionÍÒÍáT°MemberExpressionÍÒÍáNªIdentifierÍÒÍØ¦configNªIdentifierÍÚÍá§bitrateÂÃ¢||V§LiteralÍåÍêÍ} ¥32000¤inite¨PropertyÍÍ%ÂÂÂNªIdentifierÍÍ­audioChannels\±LogicalExpressionÍÍ%R¯ChainExpressionÍÍ T°MemberExpressionÍÍ NªIdentifierÍÍ¦configNªIdentifierÍÍ ¨channelsÂÃ¢||V§LiteralÍ$Í%¡1¤inite¨PropertyÍ<ÍeÂÂÂNªIdentifierÍ<ÍFªaudioCodecT°MemberExpressionÍHÍeT°MemberExpressionÍHÍ[NªIdentifierÍHÍM¥mediaNªIdentifierÍNÍ[­CodecMimeTypeÂÂNªIdentifierÍ\Íe©AUDIO_AACÂÂ¤inite¨PropertyÍ|Í¨ÂÂÂNªIdentifierÍ|Í‹¯audioSampleRate\±LogicalExpressionÍÍ¨R¯ChainExpressionÍÍŸT°MemberExpressionÍÍŸNªIdentifierÍÍ“¦configNªIdentifierÍ•ÍŸªsampleRateÂÃ¢||V§LiteralÍ£Í¨Í>€¥16000¤inite¨PropertyÍ¿ÍğÂÂÂNªIdentifierÍ¿ÍÉªfileFormatT°MemberExpressionÍËÍğT°MemberExpressionÍËÍäNªIdentifierÍËÍĞ¥mediaNªIdentifierÍÑÍä³ContainerFormatTypeÂÂNªIdentifierÍåÍğ«CFT_MPEG_4AÂÂ¤init¤inite¨PropertyÍÍ,ÂÂÂNªIdentifierÍÍ£url_¯TemplateLiteralÍÍ,‘T°MemberExpressionÍ#Í*NªIdentifierÍ#Í'¤fileNªIdentifierÍ(Í*¢fdÂÂ’`¯TemplateElementÍÍ!a¥fd://¥fd://Â`¯TemplateElementÍ+Í+a  Ã¤init¥constR³ExpressionStatementÍfÍ‘Z¯AwaitExpressionÍfÍ[®CallExpressionÍlÍT°MemberExpressionÍlÍT°MemberExpressionÍlÍyU®ThisExpressionÍlÍpNªIdentifierÍqÍy¨recorderÂÂNªIdentifierÍzÍ§prepareÂÂ‘NªIdentifierÍ‚Í­defaultConfigÂR³ExpressionStatementÍŸÍÑZ¯AwaitExpressionÍŸÍĞ[®CallExpressionÍ¥ÍĞT°MemberExpressionÍ¥Í¾U®ThisExpressionÍ¥Í©NªIdentifierÍªÍ¾´waitForRecorderStateÂÂ’V§LiteralÍ¿ÍÉ¨preparedª'prepared'V§LiteralÍËÍÏÍĞ¤2000ÂR³ExpressionStatementÍßÍûZ¯AwaitExpressionÍßÍú[®CallExpressionÍåÍúT°MemberExpressionÍåÍøT°MemberExpressionÍåÍòU®ThisExpressionÍåÍéNªIdentifierÍêÍò¨recorderÂÂNªIdentifierÍóÍø¥startÂÂÂR³ExpressionStatementÍ	Í7[®CallExpressionÍ	Í6T°MemberExpressionÍ	ÍNªIdentifierÍ	Í¥hilogNªIdentifierÍÍ¤infoÂÂ“V§LiteralÍÍ ¦0x0000V§LiteralÍÍ*¬AudioManager®'AudioManager'V§LiteralÍ,Í5µå½•éŸ³å™¨å¯åŠ¨æˆåŠŸ·'å½•éŸ³å™¨å¯åŠ¨æˆåŠŸ'ÂR³ExpressionStatementÍ`ÍzZ¯AwaitExpressionÍ`Íy[®CallExpressionÍfÍyT°MemberExpressionÍfÍwU®ThisExpressionÍfÍjNªIdentifierÍkÍw¬initCapturerÂÂÂW«IfStatementÍˆÍyT°MemberExpressionÍŒÍU®ThisExpressionÍŒÍNªIdentifierÍ‘Í­audioCapturerÂÂO®BlockStatementÍ Íy”R³ExpressionStatementÍ³ÍÔZ¯AwaitExpressionÍ³ÍÓ[®CallExpressionÍ¹ÍÓT°MemberExpressionÍ¹ÍÑT°MemberExpressionÍ¹ÍËU®ThisExpressionÍ¹Í½NªIdentifierÍ¾ÍË­audioCapturerÂÂNªIdentifierÍÌÍÑ¥startÂÂÂR³ExpressionStatementÍæÍşS´AssignmentExpressionÍæÍı¡=T°MemberExpressionÍæÍöU®ThisExpressionÍæÍêNªIdentifierÍëÍö«isCapturingÂÂV§LiteralÍùÍıÃ¤trueR³ExpressionStatementÍÍ'[®CallExpressionÍÍ&T°MemberExpressionÍÍ$U®ThisExpressionÍÍNªIdentifierÍÍ$¯readPcmDataLoopÂÂÂR³ExpressionStatementÍ9Íj[®CallExpressionÍ9ÍiT°MemberExpressionÍ9ÍCNªIdentifierÍ9Í>¥hilogNªIdentifierÍ?ÍC¤infoÂÂ“V§LiteralÍDÍJ ¦0x0000V§LiteralÍLÍZ¬AudioManager®'AudioManager'V§LiteralÍ\Íh¸PCMé‡‡é›†å™¨å¯åŠ¨æˆåŠŸº'PCMé‡‡é›†å™¨å¯åŠ¨æˆåŠŸ'ÂÀR³ExpressionStatementÍ¤Í¼S´AssignmentExpressionÍ¤Í»¡=T°MemberExpressionÍ¤Í´U®ThisExpressionÍ¤Í¨NªIdentifierÍ©Í´«isRecordingÂÂV§LiteralÍ·Í»Ã¤trueR³ExpressionStatementÍÊÍìS´AssignmentExpressionÍÊÍë¡=T°MemberExpressionÍÊÍßU®ThisExpressionÍÊÍÎNªIdentifierÍÏÍß°currentAudioPathÂÂNªIdentifierÍâÍë©audioPathR³ExpressionStatementÍúÍS´AssignmentExpressionÍúÍ¡=T°MemberExpressionÍúÍU®ThisExpressionÍúÍşNªIdentifierÍÿÍ¯recordStartTimeÂÂ[®CallExpressionÍÍT°MemberExpressionÍÍNªIdentifierÍÍ¤DateNªIdentifierÍÍ£nowÂÂÂR³ExpressionStatementÍ*ÍIR¯ChainExpressionÍ*ÍH[®CallExpressionÍ*ÍHT°MemberExpressionÍ*ÍDU®ThisExpressionÍ*Í.NªIdentifierÍ/ÍDµonRecordStartCallbackÂÂÃ^«CatchClauseÍ^Í†NªIdentifierÍeÍj¥errorO®BlockStatementÍlÍ†–b³VariableDeclarationÍ{Í‹‘c²VariableDeclaratorÍÍŠNªIdentifierÍÍ‚¡eNªIdentifierÍ…ÍŠ¥error¥constb³VariableDeclarationÍ™ÍÁ‘c²VariableDeclaratorÍŸÍÀNªIdentifierÍŸÍ§¨errorMsg_¯TemplateLiteralÍªÍÀ‘T°MemberExpressionÍµÍ¾NªIdentifierÍµÍ¶¡eNªIdentifierÍ·Í¾§messageÂÂ’`¯TemplateElementÍ«Í³a´å¼€å§‹å½•éŸ³å¤±è´¥: ´å¼€å§‹å½•éŸ³å¤±è´¥: Â`¯TemplateElementÍ¿Í¿a  Ã¥constR³ExpressionStatementÍÏÍı[®CallExpressionÍÏÍüT°MemberExpressionÍÏÍÚNªIdentifierÍÏÍÔ¥hilogNªIdentifierÍÕÍÚ¥errorÂÂ“V§LiteralÍÛÍá ¦0x0000V§LiteralÍãÍñ¬AudioManager®'AudioManager'NªIdentifierÍóÍû¨errorMsgÂR³ExpressionStatementÍÍ$S´AssignmentExpressionÍÍ#¡=T°MemberExpressionÍÍU®ThisExpressionÍÍNªIdentifierÍÍ«isRecordingÂÂV§LiteralÍÍ#Â¥falseR³ExpressionStatementÍ2ÍSR¯ChainExpressionÍ2ÍR[®CallExpressionÍ2ÍRT°MemberExpressionÍ2ÍFU®ThisExpressionÍ2Í6NªIdentifierÍ7ÍF¯onErrorCallbackÂÂ‘NªIdentifierÍIÍQ¨errorMsgÃZ®ThrowStatementÍaÍ{Y­NewExpressionÍgÍzNªIdentifierÍkÍp¥Error‘NªIdentifierÍqÍy¨errorMsgÀP°MethodDefinitionÍ“Í*LÂÂNªIdentifierÍ™Í¦­stopRecording¦methodQ²FunctionExpressionÍ¦Í*LÀÂÂÃO®BlockStatementÍ©Í*L•W«IfStatementÍ´Í WX¯UnaryExpressionÍ¸ÍÉ¡!ÃT°MemberExpressionÍ¹ÍÉU®ThisExpressionÍ¹Í½NªIdentifierÍ¾ÍÉ«isRecordingÂÂO®BlockStatementÍËÍ W’R³ExpressionStatementÍÚÍ [®CallExpressionÍÚÍ T°MemberExpressionÍÚÍäNªIdentifierÍÚÍß¥hilogNªIdentifierÍàÍä¤warnÂÂ“V§LiteralÍåÍë ¦0x0000V§LiteralÍíÍû¬AudioManager®'AudioManager'V§LiteralÍıÍ µå½“å‰æ²¡æœ‰åœ¨å½•éŸ³·'å½“å‰æ²¡æœ‰åœ¨å½•éŸ³'ÂZ¯ReturnStatementÍ Í Ld°ObjectExpressionÍ Í K“e¨PropertyÍ Í -ÂÂÂNªIdentifierÍ Í &§successV§LiteralÍ (Í -Â¥false¤inite¨PropertyÍ /Í <ÂÂÂNªIdentifierÍ /Í 8©audioPathV§LiteralÍ :Í < ¢''¤inite¨PropertyÍ >Í IÂÂÂNªIdentifierÍ >Í F¨durationV§LiteralÍ HÍ I ¡0¤initÀW«IfStatementÍ aÍ!X¯UnaryExpressionÍ eÍ s¡!ÃT°MemberExpressionÍ fÍ sU®ThisExpressionÍ fÍ jNªIdentifierÍ kÍ s¨recorderÂÂO®BlockStatementÍ uÍ!’R³ExpressionStatementÍ „Í ²[®CallExpressionÍ „Í ±T°MemberExpressionÍ „Í NªIdentifierÍ „Í ‰¥hilogNªIdentifierÍ ŠÍ ¥errorÂÂ“V§LiteralÍ Í – ¦0x0000V§LiteralÍ ˜Í ¦¬AudioManager®'AudioManager'V§LiteralÍ ¨Í °²å½•éŸ³å™¨ä¸å­˜åœ¨´'å½•éŸ³å™¨ä¸å­˜åœ¨'ÂZ¯ReturnStatementÍ ÀÍ öd°ObjectExpressionÍ ÇÍ õ“e¨PropertyÍ ÉÍ ×ÂÂÂNªIdentifierÍ ÉÍ Ğ§successV§LiteralÍ ÒÍ ×Â¥false¤inite¨PropertyÍ ÙÍ æÂÂÂNªIdentifierÍ ÙÍ â©audioPathV§LiteralÍ äÍ æ ¢''¤inite¨PropertyÍ èÍ óÂÂÂNªIdentifierÍ èÍ ğ¨durationV§LiteralÍ òÍ ó ¡0¤initÀb³VariableDeclarationÍ!-Í!u‘c²VariableDeclaratorÍ!3Í!tNªIdentifierÍ!3Í!;¨duration[®CallExpressionÍ!>Í!tT°MemberExpressionÍ!>Í!HNªIdentifierÍ!>Í!B¤MathNªIdentifierÍ!CÍ!H¥floorÂÂ‘\°BinaryExpressionÍ!IÍ!s\°BinaryExpressionÍ!JÍ!k[®CallExpressionÍ!JÍ!TT°MemberExpressionÍ!JÍ!RNªIdentifierÍ!JÍ!N¤DateNªIdentifierÍ!OÍ!R£nowÂÂÂ¡-T°MemberExpressionÍ!WÍ!kU®ThisExpressionÍ!WÍ![NªIdentifierÍ!\Í!k¯recordStartTimeÂÂ¡/V§LiteralÍ!oÍ!sÍè¤1000Â¥constb³VariableDeclarationÍ!Í!§‘c²VariableDeclaratorÍ!…Í!¦NªIdentifierÍ!…Í!©audioPathT°MemberExpressionÍ!‘Í!¦U®ThisExpressionÍ!‘Í!•NªIdentifierÍ!–Í!¦°currentAudioPathÂÂ¥const]¬TryStatementÍ!±Í*EO®BlockStatementÍ!µÍ(À˜R³ExpressionStatementÍ!àÍ!ùS´AssignmentExpressionÍ!àÍ!ø¡=T°MemberExpressionÍ!àÍ!ğU®ThisExpressionÍ!àÍ!äNªIdentifierÍ!åÍ!ğ«isCapturingÂÂV§LiteralÍ!óÍ!øÂ¥falseW«IfStatementÍ"Í#¸T°MemberExpressionÍ"Í"U®ThisExpressionÍ"Í"NªIdentifierÍ"Í"­audioCapturerÂÂO®BlockStatementÍ"Í#¸‘]¬TryStatementÍ"2Í#©O®BlockStatementÍ"6Í#/”R³ExpressionStatementÍ"MÍ"mZ¯AwaitExpressionÍ"MÍ"l[®CallExpressionÍ"SÍ"lT°MemberExpressionÍ"SÍ"jT°MemberExpressionÍ"SÍ"eU®ThisExpressionÍ"SÍ"WNªIdentifierÍ"XÍ"e­audioCapturerÂÂNªIdentifierÍ"fÍ"j¤stopÂÂÂR³ExpressionStatementÍ"ƒÍ"¦Z¯AwaitExpressionÍ"ƒÍ"¥[®CallExpressionÍ"‰Í"¥T°MemberExpressionÍ"‰Í"£T°MemberExpressionÍ"‰Í"›U®ThisExpressionÍ"‰Í"NªIdentifierÍ"Í"›­audioCapturerÂÂNªIdentifierÍ"œÍ"£§releaseÂÂÂR³ExpressionStatementÍ"¼Í"ÖS´AssignmentExpressionÍ"¼Í"Õ¡=T°MemberExpressionÍ"¼Í"ÎU®ThisExpressionÍ"¼Í"ÀNªIdentifierÍ"ÁÍ"Î­audioCapturerÂÂV§LiteralÍ"ÑÍ"ÕÀ¤nullR³ExpressionStatementÍ"ìÍ#[®CallExpressionÍ"ìÍ#T°MemberExpressionÍ"ìÍ"öNªIdentifierÍ"ìÍ"ñ¥hilogNªIdentifierÍ"òÍ"ö¤infoÂÂ“V§LiteralÍ"÷Í"ı ¦0x0000V§LiteralÍ"ÿÍ#¬AudioManager®'AudioManager'V§LiteralÍ#Í#µPCMé‡‡é›†å™¨å·²åœæ­¢·'PCMé‡‡é›†å™¨å·²åœæ­¢'Â^«CatchClauseÍ#AÍ#©NªIdentifierÍ#HÍ#I¡eO®BlockStatementÍ#KÍ#©‘R³ExpressionStatementÍ#bÍ#–[®CallExpressionÍ#bÍ#•T°MemberExpressionÍ#bÍ#lNªIdentifierÍ#bÍ#g¥hilogNªIdentifierÍ#hÍ#l¤warnÂÂ“V§LiteralÍ#mÍ#s ¦0x0000V§LiteralÍ#uÍ#ƒ¬AudioManager®'AudioManager'V§LiteralÍ#…Í#”Ù!PCMé‡‡é›†å™¨åœæ­¢å¤±è´¥ï¼Œç»§ç»­Ù#'PCMé‡‡é›†å™¨åœæ­¢å¤±è´¥ï¼Œç»§ç»­'ÂÀÀW«IfStatementÍ#áÍ%O\±LogicalExpressionÍ#åÍ$'\°BinaryExpressionÍ#åÍ$T°MemberExpressionÍ#åÍ#÷U®ThisExpressionÍ#åÍ#éNªIdentifierÍ#êÍ#÷­recorderStateÂÂ£===V§LiteralÍ#üÍ$¤idle¦'idle'¢||\°BinaryExpressionÍ$Í$'T°MemberExpressionÍ$Í$U®ThisExpressionÍ$Í$
+NªIdentifierÍ$Í$­recorderStateÂÂ£===V§LiteralÍ$Í$'¨releasedª'released'O®BlockStatementÍ$)Í%O”R³ExpressionStatementÍ$<Í$ˆ[®CallExpressionÍ$<Í$‡T°MemberExpressionÍ$<Í$FNªIdentifierÍ$<Í$A¥hilogNªIdentifierÍ$BÍ$F¤warnÂÂ“V§LiteralÍ$GÍ$M ¦0x0000V§LiteralÍ$OÍ$]¬AudioManager®'AudioManager'_¯TemplateLiteralÍ$_Í$†‘T°MemberExpressionÍ$kÍ$}U®ThisExpressionÍ$kÍ$oNªIdentifierÍ$pÍ$}­recorderStateÂÂ’`¯TemplateElementÍ$`Í$ia·å½•éŸ³å™¨çŠ¶æ€å¼‚å¸¸: ·å½•éŸ³å™¨çŠ¶æ€å¼‚å¸¸: Â`¯TemplateElementÍ$~Í$…aµï¼Œè·³è¿‡åœæ­¢æ“ä½œµï¼Œè·³è¿‡åœæ­¢æ“ä½œÃÂR³ExpressionStatementÍ$šÍ$³S´AssignmentExpressionÍ$šÍ$²¡=T°MemberExpressionÍ$šÍ$ªU®ThisExpressionÍ$šÍ$NªIdentifierÍ$ŸÍ$ª«isRecordingÂÂV§LiteralÍ$­Í$²Â¥falseR³ExpressionStatementÍ$ÅÍ$ëR¯ChainExpressionÍ$ÅÍ$ê[®CallExpressionÍ$ÅÍ$êT°MemberExpressionÍ$ÅÍ$ŞU®ThisExpressionÍ$ÅÍ$ÉNªIdentifierÍ$ÊÍ$Ş´onRecordStopCallbackÂÂ‘NªIdentifierÍ$áÍ$é¨durationÃZ¯ReturnStatementÍ$ıÍ%@d°ObjectExpressionÍ%Í%?“e¨PropertyÍ%Í%ÂÂÂNªIdentifierÍ%Í%§successV§LiteralÍ%Í%Ã¤true¤inite¨PropertyÍ%Í%)ÂÂÂNªIdentifierÍ%Í%©audioPathNªIdentifierÍ% Í%)©audioPath¤inite¨PropertyÍ%+Í%=ÂÂÂNªIdentifierÍ%+Í%3¨durationNªIdentifierÍ%5Í%=¨duration¤initÀW«IfStatementÍ%…Í&Ò\°BinaryExpressionÍ%‰Í%©T°MemberExpressionÍ%‰Í%›U®ThisExpressionÍ%‰Í%NªIdentifierÍ%Í%›­recorderStateÂÂ£===V§LiteralÍ% Í%©§started©'started'O®BlockStatementÍ%«Í&Ò‘]¬TryStatementÍ%¾Í&ÃO®BlockStatementÍ%ÂÍ&J’R³ExpressionStatementÍ%ÙÍ%ôZ¯AwaitExpressionÍ%ÙÍ%ó[®CallExpressionÍ%ßÍ%óT°MemberExpressionÍ%ßÍ%ñT°MemberExpressionÍ%ßÍ%ìU®ThisExpressionÍ%ßÍ%ãNªIdentifierÍ%äÍ%ì¨recorderÂÂNªIdentifierÍ%íÍ%ñ¤stopÂÂÂR³ExpressionStatementÍ&
+Í&7[®CallExpressionÍ&
+Í&6T°MemberExpressionÍ&
+Í&NªIdentifierÍ&
+Í&¥hilogNªIdentifierÍ&Í&¤infoÂÂ“V§LiteralÍ&Í& ¦0x0000V§LiteralÍ&Í&+¬AudioManager®'AudioManager'V§LiteralÍ&-Í&5²å½•éŸ³å™¨å·²åœæ­¢´'å½•éŸ³å™¨å·²åœæ­¢'Â^«CatchClauseÍ&\Í&ÃNªIdentifierÍ&cÍ&d¡eO®BlockStatementÍ&fÍ&Ã‘R³ExpressionStatementÍ&}Í&°[®CallExpressionÍ&}Í&¯T°MemberExpressionÍ&}Í&‡NªIdentifierÍ&}Í&‚¥hilogNªIdentifierÍ&ƒÍ&‡¤warnÂÂ“V§LiteralÍ&ˆÍ& ¦0x0000V§LiteralÍ&Í&¬AudioManager®'AudioManager'V§LiteralÍ& Í&®Ù$å½•éŸ³å™¨åœæ­¢å¤±è´¥ï¼Œå°è¯•é‡ç½®Ù&'å½•éŸ³å™¨åœæ­¢å¤±è´¥ï¼Œå°è¯•é‡ç½®'ÂÀÀ]¬TryStatementÍ'Í'ìO®BlockStatementÍ'Í'„’R³ExpressionStatementÍ'Í'6Z¯AwaitExpressionÍ'Í'5[®CallExpressionÍ' Í'5T°MemberExpressionÍ' Í'3T°MemberExpressionÍ' Í'-U®ThisExpressionÍ' Í'$NªIdentifierÍ'%Í'-¨recorderÂÂNªIdentifierÍ'.Í'3¥resetÂÂÂR³ExpressionStatementÍ'HÍ'u[®CallExpressionÍ'HÍ'tT°MemberExpressionÍ'HÍ'RNªIdentifierÍ'HÍ'M¥hilogNªIdentifierÍ'NÍ'R¤infoÂÂ“V§LiteralÍ'SÍ'Y ¦0x0000V§LiteralÍ'[Í'i¬AudioManager®'AudioManager'V§LiteralÍ'kÍ's²å½•éŸ³å™¨å·²é‡ç½®´'å½•éŸ³å™¨å·²é‡ç½®'Â^«CatchClauseÍ'’Í'ìNªIdentifierÍ'™Í'š¡eO®BlockStatementÍ'œÍ'ì‘R³ExpressionStatementÍ'¯Í'İ[®CallExpressionÍ'¯Í'ÜT°MemberExpressionÍ'¯Í'¹NªIdentifierÍ'¯Í'´¥hilogNªIdentifierÍ'µÍ'¹¤warnÂÂ“V§LiteralÍ'ºÍ'À ¦0x0000V§LiteralÍ'ÂÍ'Ğ¬AudioManager®'AudioManager'V§LiteralÍ'ÒÍ'Ûµå½•éŸ³å™¨é‡ç½®å¤±è´¥·'å½•éŸ³å™¨é‡ç½®å¤±è´¥'ÂÀR³ExpressionStatementÍ(Í(0S´AssignmentExpressionÍ(Í(/¡=T°MemberExpressionÍ(Í('U®ThisExpressionÍ(Í(NªIdentifierÍ(Í('«isRecordingÂÂV§LiteralÍ(*Í(/Â¥falseR³ExpressionStatementÍ(>Í(dR¯ChainExpressionÍ(>Í(c[®CallExpressionÍ(>Í(cT°MemberExpressionÍ(>Í(WU®ThisExpressionÍ(>Í(BNªIdentifierÍ(CÍ(W´onRecordStopCallbackÂÂ‘NªIdentifierÍ(ZÍ(b¨durationÃZ¯ReturnStatementÍ(rÍ(µd°ObjectExpressionÍ(yÍ(´“e¨PropertyÍ({Í(ˆÂÂÂNªIdentifierÍ({Í(‚§successV§LiteralÍ(„Í(ˆÃ¤true¤inite¨PropertyÍ(ŠÍ(ÂÂÂNªIdentifierÍ(ŠÍ(“©audioPathNªIdentifierÍ(•Í(©audioPath¤inite¨PropertyÍ( Í(²ÂÂÂNªIdentifierÍ( Í(¨¨durationNªIdentifierÍ(ªÍ(²¨duration¤init^«CatchClauseÍ(ÊÍ*ENªIdentifierÍ(ÑÍ(Ö¥errorO®BlockStatementÍ(ØÍ*E–b³VariableDeclarationÍ(çÍ(÷‘c²VariableDeclaratorÍ(íÍ(öNªIdentifierÍ(íÍ(î¡eNªIdentifierÍ(ñÍ(ö¥error¥constb³VariableDeclarationÍ)Í)-‘c²VariableDeclaratorÍ)Í),NªIdentifierÍ)Í)¨errorMsg_¯TemplateLiteralÍ)Í),‘T°MemberExpressionÍ)!Í)*NªIdentifierÍ)!Í)"¡eNªIdentifierÍ)#Í)*§messageÂÂ’`¯TemplateElementÍ)Í)a´åœæ­¢å½•éŸ³å¤±è´¥: ´åœæ­¢å½•éŸ³å¤±è´¥: Â`¯TemplateElementÍ)+Í)+a  Ã¥constR³ExpressionStatementÍ);Í)i[®CallExpressionÍ);Í)hT°MemberExpressionÍ);Í)FNªIdentifierÍ);Í)@¥hilogNªIdentifierÍ)AÍ)F¥errorÂÂ“V§LiteralÍ)GÍ)M ¦0x0000V§LiteralÍ)OÍ)]¬AudioManager®'AudioManager'NªIdentifierÍ)_Í)g¨errorMsgÂR³ExpressionStatementÍ)wÍ)S´AssignmentExpressionÍ)wÍ)¡=T°MemberExpressionÍ)wÍ)‡U®ThisExpressionÍ)wÍ){NªIdentifierÍ)|Í)‡«isRecordingÂÂV§LiteralÍ)ŠÍ)Â¥falseR³ExpressionStatementÍ)ÃÍ)éR¯ChainExpressionÍ)ÃÍ)è[®CallExpressionÍ)ÃÍ)èT°MemberExpressionÍ)ÃÍ)ÜU®ThisExpressionÍ)ÃÍ)ÇNªIdentifierÍ)ÈÍ)Ü´onRecordStopCallbackÂÂ‘NªIdentifierÍ)ßÍ)ç¨durationÃZ¯ReturnStatementÍ)÷Í*:d°ObjectExpressionÍ)şÍ*9“e¨PropertyÍ* Í*ÂÂÂNªIdentifierÍ* Í*§successV§LiteralÍ*	Í*Ã¤true¤inite¨PropertyÍ*Í*#ÂÂÂNªIdentifierÍ*Í*©audioPathNªIdentifierÍ*Í*#©audioPath¤inite¨PropertyÍ*%Í*7ÂÂÂNªIdentifierÍ*%Í*-¨durationNªIdentifierÍ*/Í*7¨duration¤initÀP°MethodDefinitionÍ*RÍ-ÂÂNªIdentifierÍ*XÍ*g¯readPcmDataLoop¦methodQ²FunctionExpressionÍ*gÍ-ÀÂÂÃO®BlockStatementÍ*jÍ-’W«IfStatementÍ*uÍ*¢X¯UnaryExpressionÍ*yÍ*Œ¡!ÃT°MemberExpressionÍ*zÍ*ŒU®ThisExpressionÍ*zÍ*~NªIdentifierÍ*Í*Œ­audioCapturerÂÂZ¯ReturnStatementÍ*›Í*¢ÀÀ]¬TryStatementÍ*¬Í-O®BlockStatementÍ*°Í,Š’b³VariableDeclarationÍ*¿Í*û‘c²VariableDeclaratorÍ*ÅÍ*úNªIdentifierÍ*ÅÍ*ÏªbufferSizeZ¯AwaitExpressionÍ*ÒÍ*ú[®CallExpressionÍ*ØÍ*úT°MemberExpressionÍ*ØÍ*øT°MemberExpressionÍ*ØÍ*êU®ThisExpressionÍ*ØÍ*ÜNªIdentifierÍ*İÍ*ê­audioCapturerÂÂNªIdentifierÍ*ëÍ*ø­getBufferSizeÂÂÂ¥constÔrf•¤type¥start£end¤test¤body®WhileStatementÍ+	Í,T°MemberExpressionÍ+Í+ U®ThisExpressionÍ+Í+NªIdentifierÍ+Í+ «isCapturingÂÂO®BlockStatementÍ+"Í,‘]¬TryStatementÍ+5Í,pO®BlockStatementÍ+9Í+Ù’b³VariableDeclarationÍ+PÍ+‘c²VariableDeclaratorÍ+VÍ+NªIdentifierÍ+VÍ+\¦bufferZ¯AwaitExpressionÍ+_Í+[®CallExpressionÍ+eÍ+T°MemberExpressionÍ+eÍ+|T°MemberExpressionÍ+eÍ+wU®ThisExpressionÍ+eÍ+iNªIdentifierÍ+jÍ+w­audioCapturerÂÂNªIdentifierÍ+xÍ+|¤readÂÂ’NªIdentifierÍ+}Í+‡ªbufferSizeV§LiteralÍ+‰Í+Ã¤trueÂ¥constR³ExpressionStatementÍ+¥Í+ÆR¯ChainExpressionÍ+¥Í+Å[®CallExpressionÍ+¥Í+ÅT°MemberExpressionÍ+¥Í+»U®ThisExpressionÍ+¥Í+©NªIdentifierÍ+ªÍ+»±onPcmDataCallbackÂÂ‘NªIdentifierÍ+¾Í+Ä¦bufferÃ^«CatchClauseÍ+ëÍ,pNªIdentifierÍ+òÍ+÷¥errorO®BlockStatementÍ+ùÍ,p’R³ExpressionStatementÍ,Í,A[®CallExpressionÍ,Í,@T°MemberExpressionÍ,Í,NªIdentifierÍ,Í,¥hilogNªIdentifierÍ,Í,¥errorÂÂ“V§LiteralÍ,Í," ¦0x0000V§LiteralÍ,$Í,2¬AudioManager®'AudioManager'V§LiteralÍ,4Í,?µè¯»å–PCMæ•°æ®å¤±è´¥·'è¯»å–PCMæ•°æ®å¤±è´¥'ÂÔrg”¤type¥start£end¥label®BreakStatementÍ,WÍ,]ÀÀ^«CatchClauseÍ,”Í-NªIdentifierÍ,›Í, ¥errorO®BlockStatementÍ,¢Í-’R³ExpressionStatementÍ,±Í,â[®CallExpressionÍ,±Í,áT°MemberExpressionÍ,±Í,¼NªIdentifierÍ,±Í,¶¥hilogNªIdentifierÍ,·Í,¼¥errorÂÂ“V§LiteralÍ,½Í,Ã ¦0x0000V§LiteralÍ,ÅÍ,Ó¬AudioManager®'AudioManager'V§LiteralÍ,ÕÍ,à»è·å–ç¼“å†²åŒºå¤§å°å¤±è´¥½'è·å–ç¼“å†²åŒºå¤§å°å¤±è´¥'ÂR³ExpressionStatementÍ,ğÍ-	S´AssignmentExpressionÍ,ğÍ-¡=T°MemberExpressionÍ,ğÍ- U®ThisExpressionÍ,ğÍ,ôNªIdentifierÍ,õÍ- «isCapturingÂÂV§LiteralÍ-Í-Â¥falseÀP°MethodDefinitionÍ-!Í8\ÂÂNªIdentifierÍ-'Í-+¤play¦methodQ²FunctionExpressionÍ-+Í8\ÀÂÂÃ‘NªIdentifierÍ-,Í-5©audioPathO®BlockStatementÍ-7Í8\’b³VariableDeclarationÍ-BÍ-X‘c²VariableDeclaratorÍ-FÍ-WNªIdentifierÍ-FÍ-PªfileHandleV§LiteralÍ-SÍ-WÀ¤null£let]¬TryStatementÍ-bÍ8UO®BlockStatementÍ-fÍ63Ü W«IfStatementÍ-Í-ÿT°MemberExpressionÍ-“Í-¡U®ThisExpressionÍ-“Í-—NªIdentifierÍ-˜Í-¡©isPlayingÂÂO®BlockStatementÍ-£Í-ÿ’R³ExpressionStatementÍ-¶Í-ÈZ¯AwaitExpressionÍ-¶Í-Ç[®CallExpressionÍ-¼Í-ÇT°MemberExpressionÍ-¼Í-ÅU®ThisExpressionÍ-¼Í-ÀNªIdentifierÍ-ÁÍ-Å¤stopÂÂÂR³ExpressionStatementÍ-ÚÍ-ğZ¯AwaitExpressionÍ-ÚÍ-ï[®CallExpressionÍ-àÍ-ïT°MemberExpressionÍ-àÍ-êU®ThisExpressionÍ-àÍ-äNªIdentifierÍ-åÍ-ê¥delayÂÂ‘V§LiteralÍ-ëÍ-îÍ,£300ÂÀR³ExpressionStatementÍ.*Í.BZ¯AwaitExpressionÍ.*Í.A[®CallExpressionÍ.0Í.AT°MemberExpressionÍ.0Í.?U®ThisExpressionÍ.0Í.4NªIdentifierÍ.5Í.?ªinitPlayerÂÂÂ]¬TryStatementÍ.lÍ/MO®BlockStatementÍ.pÍ.ø’R³ExpressionStatementÍ.ƒÍ.Z¯AwaitExpressionÍ.ƒÍ.[®CallExpressionÍ.‰Í.T°MemberExpressionÍ.‰Í.’NªIdentifierÍ.‰Í.‹¢fsNªIdentifierÍ.ŒÍ.’¦accessÂÂ‘NªIdentifierÍ.“Í.œ©audioPathÂR³ExpressionStatementÍ.°Í.é[®CallExpressionÍ.°Í.èT°MemberExpressionÍ.°Í.ºNªIdentifierÍ.°Í.µ¥hilogNªIdentifierÍ.¶Í.º¤infoÂÂ“V§LiteralÍ.»Í.Á ¦0x0000V§LiteralÍ.ÃÍ.Ñ¬AudioManager®'AudioManager'_¯TemplateLiteralÍ.ÓÍ.ç‘NªIdentifierÍ.ÜÍ.å©audioPath’`¯TemplateElementÍ.ÔÍ.Úa®æ–‡ä»¶å­˜åœ¨: ®æ–‡ä»¶å­˜åœ¨: Â`¯TemplateElementÍ.æÍ.æa  ÃÂ^«CatchClauseÍ/Í/MNªIdentifierÍ/Í/¡eO®BlockStatementÍ/Í/M‘Z®ThrowStatementÍ/#Í/>Y­NewExpressionÍ/)Í/=NªIdentifierÍ/-Í/2¥Error‘V§LiteralÍ/3Í/<µéŸ³é¢‘æ–‡ä»¶ä¸å­˜åœ¨·'éŸ³é¢‘æ–‡ä»¶ä¸å­˜åœ¨'ÀR³ExpressionStatementÍ/zÍ/¿[®CallExpressionÍ/zÍ/¾T°MemberExpressionÍ/zÍ/„NªIdentifierÍ/zÍ/¥hilogNªIdentifierÍ/€Í/„¤infoÂÂ“V§LiteralÍ/…Í/‹ ¦0x0000V§LiteralÍ/Í/›¬AudioManager®'AudioManager'_¯TemplateLiteralÍ/Í/½‘T°MemberExpressionÍ/«Í/»U®ThisExpressionÍ/«Í/¯NªIdentifierÍ/°Í/»«playerStateÂÂ’`¯TemplateElementÍ/Í/©a½å‡†å¤‡æ’­æ”¾ï¼Œå½“å‰çŠ¶æ€: ½å‡†å¤‡æ’­æ”¾ï¼Œå½“å‰çŠ¶æ€: Â`¯TemplateElementÍ/¼Í/¼a  ÃÂW«IfStatementÍ/ÍÍ1‹\±LogicalExpressionÍ/ÑÍ0 \°BinaryExpressionÍ/ÑÍ/ğT°MemberExpressionÍ/ÑÍ/áU®ThisExpressionÍ/ÑÍ/ÕNªIdentifierÍ/ÖÍ/á«playerStateÂÂ£===V§LiteralÍ/æÍ/ğ¨releasedª'released'¢||X¯UnaryExpressionÍ/ôÍ0 ¡!ÃT°MemberExpressionÍ/õÍ0 U®ThisExpressionÍ/õÍ/ùNªIdentifierÍ/úÍ0 ¦playerÂÂO®BlockStatementÍ0Í0„’R³ExpressionStatementÍ0Í0K[®CallExpressionÍ0Í0JT°MemberExpressionÍ0Í0NªIdentifierÍ0Í0¥hilogNªIdentifierÍ0Í0¤infoÂÂ“V§LiteralÍ0 Í0& ¦0x0000V§LiteralÍ0(Í06¬AudioManager®'AudioManager'V§LiteralÍ08Í0IÙ'æ’­æ”¾å™¨å·²é‡Šæ”¾ï¼Œé‡æ–°åˆå§‹åŒ–...Ù)'æ’­æ”¾å™¨å·²é‡Šæ”¾ï¼Œé‡æ–°åˆå§‹åŒ–...'ÂR³ExpressionStatementÍ0]Í0uZ¯AwaitExpressionÍ0]Í0t[®CallExpressionÍ0cÍ0tT°MemberExpressionÍ0cÍ0rU®ThisExpressionÍ0cÍ0gNªIdentifierÍ0hÍ0rªinitPlayerÂÂÂW«IfStatementÍ0—Í1‹\°BinaryExpressionÍ0›Í0¶T°MemberExpressionÍ0›Í0«U®ThisExpressionÍ0›Í0ŸNªIdentifierÍ0 Í0««playerStateÂÂ£!==V§LiteralÍ0°Í0¶¤idle¦'idle'O®BlockStatementÍ0¸Í1‹“R³ExpressionStatementÍ0ËÍ1[®CallExpressionÍ0ËÍ1T°MemberExpressionÍ0ËÍ0ÕNªIdentifierÍ0ËÍ0Ğ¥hilogNªIdentifierÍ0ÑÍ0Õ¤infoÂÂ“V§LiteralÍ0ÖÍ0Ü ¦0x0000V§LiteralÍ0ŞÍ0ì¬AudioManager®'AudioManager'_¯TemplateLiteralÍ0îÍ1‘T°MemberExpressionÍ0öÍ1U®ThisExpressionÍ0öÍ0úNªIdentifierÍ0ûÍ1«playerStateÂÂ’`¯TemplateElementÍ0ïÍ0ôa­å½“å‰çŠ¶æ€ ­å½“å‰çŠ¶æ€ Â`¯TemplateElementÍ1Í1a²ï¼Œæ­£åœ¨é‡ç½®...²ï¼Œæ­£åœ¨é‡ç½®...ÃÂR³ExpressionStatementÍ1$Í1>Z¯AwaitExpressionÍ1$Í1=[®CallExpressionÍ1*Í1=T°MemberExpressionÍ1*Í1;T°MemberExpressionÍ1*Í15U®ThisExpressionÍ1*Í1.NªIdentifierÍ1/Í15¦playerÂÂNªIdentifierÍ16Í1;¥resetÂÂÂR³ExpressionStatementÍ1PÍ1|Z¯AwaitExpressionÍ1PÍ1{[®CallExpressionÍ1VÍ1{T°MemberExpressionÍ1VÍ1mU®ThisExpressionÍ1VÍ1ZNªIdentifierÍ1[Í1m²waitForPlayerStateÂÂ’V§LiteralÍ1nÍ1t¤idle¦'idle'V§LiteralÍ1vÍ1zÍ¸¤3000ÂÀR³ExpressionStatementÍ1ßÍ2S´AssignmentExpressionÍ1ßÍ2¡=NªIdentifierÍ1ßÍ1éªfileHandleZ¯AwaitExpressionÍ1ìÍ2[®CallExpressionÍ1òÍ2T°MemberExpressionÍ1òÍ1ùNªIdentifierÍ1òÍ1ô¢fsNªIdentifierÍ1õÍ1ù¤openÂÂ’NªIdentifierÍ1úÍ2©audioPathT°MemberExpressionÍ2Í2T°MemberExpressionÍ2Í2NªIdentifierÍ2Í2¢fsNªIdentifierÍ2Í2¨OpenModeÂÂNªIdentifierÍ2Í2©READ_ONLYÂÂÂb³VariableDeclarationÍ2YÍ2‘c²VariableDeclaratorÍ2_Í2~NªIdentifierÍ2_Í2c¤statZ¯AwaitExpressionÍ2fÍ2~[®CallExpressionÍ2lÍ2~T°MemberExpressionÍ2lÍ2sNªIdentifierÍ2lÍ2n¢fsNªIdentifierÍ2oÍ2s¤statÂÂ‘NªIdentifierÍ2tÍ2}©audioPathÂ¥constb³VariableDeclarationÍ2·Í3D‘c²VariableDeclaratorÍ2½Í3CNªIdentifierÍ2½Í2Í°avFileDescriptord°ObjectExpressionÍ2ĞÍ3C“e¨PropertyÍ2ãÍ2ôÂÂÂNªIdentifierÍ2ãÍ2å¢fdT°MemberExpressionÍ2çÍ2ôNªIdentifierÍ2çÍ2ñªfileHandleNªIdentifierÍ2òÍ2ô¢fdÂÂ¤inite¨PropertyÍ3Í3ÂÂÂNªIdentifierÍ3Í3¦offsetV§LiteralÍ3Í3 ¡0¤inite¨PropertyÍ3#Í34ÂÂÂNªIdentifierÍ3#Í3)¦lengthT°MemberExpressionÍ3+Í34NªIdentifierÍ3+Í3/¤statNªIdentifierÍ30Í34¤sizeÂÂ¤init¥constR³ExpressionStatementÍ3RÍ3ª[®CallExpressionÍ3RÍ3©T°MemberExpressionÍ3RÍ3\NªIdentifierÍ3RÍ3W¥hilogNªIdentifierÍ3XÍ3\¤infoÂÂ“V§LiteralÍ3]Í3c ¦0x0000V§LiteralÍ3eÍ3s¬AudioManager®'AudioManager'_¯TemplateLiteralÍ3uÍ3¨’T°MemberExpressionÍ3†Í3“NªIdentifierÍ3†Í3ªfileHandleNªIdentifierÍ3‘Í3“¢fdÂÂT°MemberExpressionÍ3Í3¦NªIdentifierÍ3Í3¡¤statNªIdentifierÍ3¢Í3¦¤sizeÂÂ“`¯TemplateElementÍ3vÍ3„aÙ ä½¿ç”¨æ–‡ä»¶æè¿°ç¬¦æ’­æ”¾: fd=Ù ä½¿ç”¨æ–‡ä»¶æè¿°ç¬¦æ’­æ”¾: fd=Â`¯TemplateElementÍ3”Í3›a§, size=§, size=Â`¯TemplateElementÍ3§Í3§a  ÃÂR³ExpressionStatementÍ3æÍ4S´AssignmentExpressionÍ3æÍ4
+¡=T°MemberExpressionÍ3æÍ3÷T°MemberExpressionÍ3æÍ3ñU®ThisExpressionÍ3æÍ3êNªIdentifierÍ3ëÍ3ñ¦playerÂÂNªIdentifierÍ3òÍ3÷¥fdSrcÂÂNªIdentifierÍ3úÍ4
+°avFileDescriptorR³ExpressionStatementÍ4BÍ4uZ¯AwaitExpressionÍ4BÍ4t[®CallExpressionÍ4HÍ4tT°MemberExpressionÍ4HÍ4_U®ThisExpressionÍ4HÍ4LNªIdentifierÍ4MÍ4_²waitForPlayerStateÂÂ’V§LiteralÍ4`Í4m«initialized­'initialized'V§LiteralÍ4oÍ4sÍ¸¤3000ÂR³ExpressionStatementÍ4œÍ4¸Z¯AwaitExpressionÍ4œÍ4·[®CallExpressionÍ4¢Í4·T°MemberExpressionÍ4¢Í4µT°MemberExpressionÍ4¢Í4­U®ThisExpressionÍ4¢Í4¦NªIdentifierÍ4§Í4­¦playerÂÂNªIdentifierÍ4®Í4µ§prepareÂÂÂR³ExpressionStatementÍ4ÆÍ4ö[®CallExpressionÍ4ÆÍ4õT°MemberExpressionÍ4ÆÍ4ĞNªIdentifierÍ4ÆÍ4Ë¥hilogNªIdentifierÍ4ÌÍ4Ğ¤infoÂÂ“V§LiteralÍ4ÑÍ4× ¦0x0000V§LiteralÍ4ÙÍ4ç¬AudioManager®'AudioManager'V§LiteralÍ4éÍ4ôµæ’­æ”¾å™¨å‡†å¤‡ä¸­...·'æ’­æ”¾å™¨å‡†å¤‡ä¸­...'ÂR³ExpressionStatementÍ5)Í5YZ¯AwaitExpressionÍ5)Í5X[®CallExpressionÍ5/Í5XT°MemberExpressionÍ5/Í5FU®ThisExpressionÍ5/Í53NªIdentifierÍ54Í5F²waitForPlayerStateÂÂ’V§LiteralÍ5GÍ5Q¨preparedª'prepared'V§LiteralÍ5SÍ5WÍ¸¤3000ÂR³ExpressionStatementÍ5€Í5™Z¯AwaitExpressionÍ5€Í5˜[®CallExpressionÍ5†Í5˜T°MemberExpressionÍ5†Í5–T°MemberExpressionÍ5†Í5‘U®ThisExpressionÍ5†Í5ŠNªIdentifierÍ5‹Í5‘¦playerÂÂNªIdentifierÍ5’Í5–¤playÂÂÂR³ExpressionStatementÍ5§Í5ÉS´AssignmentExpressionÍ5§Í5È¡=T°MemberExpressionÍ5§Í5¼U®ThisExpressionÍ5§Í5«NªIdentifierÍ5¬Í5¼°currentAudioPathÂÂNªIdentifierÍ5¿Í5È©audioPathR³ExpressionStatementÍ5×Í6[®CallExpressionÍ5×Í6T°MemberExpressionÍ5×Í5áNªIdentifierÍ5×Í5Ü¥hilogNªIdentifierÍ5İÍ5á¤infoÂÂ“V§LiteralÍ5âÍ5è ¦0x0000V§LiteralÍ5êÍ5ø¬AudioManager®'AudioManager'V§LiteralÍ5úÍ6 ¬å¼€å§‹æ’­æ”¾®'å¼€å§‹æ’­æ”¾'Â^«CatchClauseÍ6=Í8UNªIdentifierÍ6DÍ6I¥errorO®BlockStatementÍ6KÍ8U–W«IfStatementÍ6vÍ7eNªIdentifierÍ6zÍ6„ªfileHandleO®BlockStatementÍ6†Í7e‘]¬TryStatementÍ6™Í7VO®BlockStatementÍ6Í6ã‘R³ExpressionStatementÍ6´Í6Ğ[®CallExpressionÍ6´Í6ÏT°MemberExpressionÍ6´Í6ÀNªIdentifierÍ6´Í6¶¢fsNªIdentifierÍ6·Í6À©closeSyncÂÂ‘T°MemberExpressionÍ6ÁÍ6ÎNªIdentifierÍ6ÁÍ6ËªfileHandleNªIdentifierÍ6ÌÍ6Î¢fdÂÂÂ^«CatchClauseÍ6õÍ7VNªIdentifierÍ6üÍ6ı¡eO®BlockStatementÍ6ÿÍ7V‘R³ExpressionStatementÍ7Í7C[®CallExpressionÍ7Í7BT°MemberExpressionÍ7Í7 NªIdentifierÍ7Í7¥hilogNªIdentifierÍ7Í7 ¤warnÂÂ“V§LiteralÍ7!Í7' ¦0x0000V§LiteralÍ7)Í77¬AudioManager®'AudioManager'V§LiteralÍ79Í7A²å…³é—­æ–‡ä»¶å¤±è´¥´'å…³é—­æ–‡ä»¶å¤±è´¥'ÂÀÀb³VariableDeclarationÍ7sÍ7ƒ‘c²VariableDeclaratorÍ7yÍ7‚NªIdentifierÍ7yÍ7z¡eNªIdentifierÍ7}Í7‚¥error¥constb³VariableDeclarationÍ7‘Í7·‘c²VariableDeclaratorÍ7—Í7¶NªIdentifierÍ7—Í7Ÿ¨errorMsg_¯TemplateLiteralÍ7¢Í7¶‘T°MemberExpressionÍ7«Í7´NªIdentifierÍ7«Í7¬¡eNªIdentifierÍ7­Í7´§messageÂÂ’`¯TemplateElementÍ7£Í7©a®æ’­æ”¾å¤±è´¥: ®æ’­æ”¾å¤±è´¥: Â`¯TemplateElementÍ7µÍ7µa  Ã¥constR³ExpressionStatementÍ7ÅÍ7ó[®CallExpressionÍ7ÅÍ7òT°MemberExpressionÍ7ÅÍ7ĞNªIdentifierÍ7ÅÍ7Ê¥hilogNªIdentifierÍ7ËÍ7Ğ¥errorÂÂ“V§LiteralÍ7ÑÍ7× ¦0x0000V§LiteralÍ7ÙÍ7ç¬AudioManager®'AudioManager'NªIdentifierÍ7éÍ7ñ¨errorMsgÂR³ExpressionStatementÍ8Í8"R¯ChainExpressionÍ8Í8![®CallExpressionÍ8Í8!T°MemberExpressionÍ8Í8U®ThisExpressionÍ8Í8NªIdentifierÍ8Í8¯onErrorCallbackÂÂ‘NªIdentifierÍ8Í8 ¨errorMsgÃZ®ThrowStatementÍ80Í8JY­NewExpressionÍ86Í8INªIdentifierÍ8:Í8?¥Error‘NªIdentifierÍ8@Í8H¨errorMsgÀP°MethodDefinitionÍ8bÍ;SÂÂNªIdentifierÍ8hÍ8z²waitForPlayerState¦methodQ²FunctionExpressionÍ8zÍ;SÀÂÂÃ’NªIdentifierÍ8{Í8†«targetStateÔrh•¤type¥start£end¤left¥right±AssignmentPatternÍ8ˆÍ8–NªIdentifierÍ8ˆÍ8§timeoutV§LiteralÍ8’Í8–Í¸¤3000O®BlockStatementÍ8˜Í;S‘Z¯ReturnStatementÍ8£Í;LY­NewExpressionÍ8ªÍ;KNªIdentifierÍ8®Í8µ§Promise‘Q·ArrowFunctionExpressionÍ8¶Í;JÀÂÂÂ’NªIdentifierÍ8·Í8¾§resolveNªIdentifierÍ8ÀÍ8Æ¦rejectO®BlockStatementÍ8ËÍ;J“W«IfStatementÍ8ÚÍ9E\°BinaryExpressionÍ8ŞÍ8şT°MemberExpressionÍ8ŞÍ8îU®ThisExpressionÍ8ŞÍ8âNªIdentifierÍ8ãÍ8î«playerStateÂÂ£===NªIdentifierÍ8óÍ8ş«targetStateO®BlockStatementÍ9 Í9E’R³ExpressionStatementÍ9Í9[®CallExpressionÍ9Í9NªIdentifierÍ9Í9§resolveÂZ¯ReturnStatementÍ9/Í96ÀÀb³VariableDeclarationÍ9SÍ9p‘c²VariableDeclaratorÍ9YÍ9oNªIdentifierÍ9YÍ9b©startTime[®CallExpressionÍ9eÍ9oT°MemberExpressionÍ9eÍ9mNªIdentifierÍ9eÍ9i¤DateNªIdentifierÍ9jÍ9m£nowÂÂÂ¥constb³VariableDeclarationÍ9~Í;?‘c²VariableDeclaratorÍ9„Í;>NªIdentifierÍ9„Í9‘­checkInterval[®CallExpressionÍ9”Í;>NªIdentifierÍ9”Í9Ÿ«setInterval’Q·ArrowFunctionExpressionÍ9 Í;8ÀÂÂÂO®BlockStatementÍ9¦Í;8‘W«IfStatementÍ9¹Í;)\°BinaryExpressionÍ9½Í9İT°MemberExpressionÍ9½Í9ÍU®ThisExpressionÍ9½Í9ÁNªIdentifierÍ9ÂÍ9Í«playerStateÂÂ£===NªIdentifierÍ9ÒÍ9İ«targetStateO®BlockStatementÍ9ßÍ:F’R³ExpressionStatementÍ9öÍ:[®CallExpressionÍ9öÍ:NªIdentifierÍ9öÍ:­clearInterval‘NªIdentifierÍ:Í:­checkIntervalÂR³ExpressionStatementÍ:)Í:3[®CallExpressionÍ:)Í:2NªIdentifierÍ:)Í:0§resolveÂW«IfStatementÍ:]Í;)\°BinaryExpressionÍ:aÍ:\°BinaryExpressionÍ:aÍ:w[®CallExpressionÍ:aÍ:kT°MemberExpressionÍ:aÍ:iNªIdentifierÍ:aÍ:e¤DateNªIdentifierÍ:fÍ:i£nowÂÂÂ¡-NªIdentifierÍ:nÍ:w©startTime¡>NªIdentifierÍ:zÍ:§timeoutO®BlockStatementÍ:ƒÍ;)’R³ExpressionStatementÍ:šÍ:·[®CallExpressionÍ:šÍ:¶NªIdentifierÍ:šÍ:§­clearInterval‘NªIdentifierÍ:¨Í:µ­checkIntervalÂR³ExpressionStatementÍ:ÍÍ;[®CallExpressionÍ:ÍÍ;NªIdentifierÍ:ÍÍ:Ó¦reject‘Y­NewExpressionÍ:ÔÍ;NªIdentifierÍ:ØÍ:İ¥Error‘_¯TemplateLiteralÍ:ŞÍ;’NªIdentifierÍ:éÍ:ô«targetStateT°MemberExpressionÍ;Í;U®ThisExpressionÍ;Í;NªIdentifierÍ;Í;«playerStateÂÂ“`¯TemplateElementÍ:ßÍ:ça¶ç­‰å¾…æ’­æ”¾å™¨çŠ¶æ€ ¶ç­‰å¾…æ’­æ”¾å™¨çŠ¶æ€ Â`¯TemplateElementÍ:õÍ:ÿa¸ è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: ¸ è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: Â`¯TemplateElementÍ;Í;a  ÃÂÀV§LiteralÍ;:Í;=Ìd£100Â¥constP°MethodDefinitionÍ;YÍ>RÂÂNªIdentifierÍ;_Í;s´waitForRecorderState¦methodQ²FunctionExpressionÍ;sÍ>RÀÂÂÃ’NªIdentifierÍ;tÍ;«targetStateh±AssignmentPatternÍ;Í;NªIdentifierÍ;Í;ˆ§timeoutV§LiteralÍ;‹Í;Í¸¤3000O®BlockStatementÍ;‘Í>R‘Z¯ReturnStatementÍ;œÍ>KY­NewExpressionÍ;£Í>JNªIdentifierÍ;§Í;®§Promise‘Q·ArrowFunctionExpressionÍ;¯Í>IÀÂÂÂ’NªIdentifierÍ;°Í;·§resolveNªIdentifierÍ;¹Í;¿¦rejectO®BlockStatementÍ;ÄÍ>I“W«IfStatementÍ;ÓÍ<@\°BinaryExpressionÍ;×Í;ùT°MemberExpressionÍ;×Í;éU®ThisExpressionÍ;×Í;ÛNªIdentifierÍ;ÜÍ;é­recorderStateÂÂ£===NªIdentifierÍ;îÍ;ù«targetStateO®BlockStatementÍ;ûÍ<@’R³ExpressionStatementÍ<Í<[®CallExpressionÍ<Í<NªIdentifierÍ<Í<§resolveÂZ¯ReturnStatementÍ<*Í<1ÀÀb³VariableDeclarationÍ<NÍ<k‘c²VariableDeclaratorÍ<TÍ<jNªIdentifierÍ<TÍ<]©startTime[®CallExpressionÍ<`Í<jT°MemberExpressionÍ<`Í<hNªIdentifierÍ<`Í<d¤DateNªIdentifierÍ<eÍ<h£nowÂÂÂ¥constb³VariableDeclarationÍ<yÍ>>‘c²VariableDeclaratorÍ<Í>=NªIdentifierÍ<Í<Œ­checkInterval[®CallExpressionÍ<Í>=NªIdentifierÍ<Í<š«setInterval’Q·ArrowFunctionExpressionÍ<›Í>7ÀÂÂÂO®BlockStatementÍ<¡Í>7‘W«IfStatementÍ<´Í>(\°BinaryExpressionÍ<¸Í<ÚT°MemberExpressionÍ<¸Í<ÊU®ThisExpressionÍ<¸Í<¼NªIdentifierÍ<½Í<Ê­recorderStateÂÂ£===NªIdentifierÍ<ÏÍ<Ú«targetStateO®BlockStatementÍ<ÜÍ=C’R³ExpressionStatementÍ<óÍ=[®CallExpressionÍ<óÍ=NªIdentifierÍ<óÍ= ­clearInterval‘NªIdentifierÍ=Í=­checkIntervalÂR³ExpressionStatementÍ=&Í=0[®CallExpressionÍ=&Í=/NªIdentifierÍ=&Í=-§resolveÂW«IfStatementÍ=ZÍ>(\°BinaryExpressionÍ=^Í=~\°BinaryExpressionÍ=^Í=t[®CallExpressionÍ=^Í=hT°MemberExpressionÍ=^Í=fNªIdentifierÍ=^Í=b¤DateNªIdentifierÍ=cÍ=f£nowÂÂÂ¡-NªIdentifierÍ=kÍ=t©startTime¡>NªIdentifierÍ=wÍ=~§timeoutO®BlockStatementÍ=€Í>(’R³ExpressionStatementÍ=—Í=´[®CallExpressionÍ=—Í=³NªIdentifierÍ=—Í=¤­clearInterval‘NªIdentifierÍ=¥Í=²­checkIntervalÂR³ExpressionStatementÍ=ÊÍ>[®CallExpressionÍ=ÊÍ>NªIdentifierÍ=ÊÍ=Ğ¦reject‘Y­NewExpressionÍ=ÑÍ>NªIdentifierÍ=ÕÍ=Ú¥Error‘_¯TemplateLiteralÍ=ÛÍ>’NªIdentifierÍ=æÍ=ñ«targetStateT°MemberExpressionÍ=şÍ>U®ThisExpressionÍ=şÍ>NªIdentifierÍ>Í>­recorderStateÂÂ“`¯TemplateElementÍ=ÜÍ=äa¶ç­‰å¾…å½•éŸ³å™¨çŠ¶æ€ ¶ç­‰å¾…å½•éŸ³å™¨çŠ¶æ€ Â`¯TemplateElementÍ=òÍ=üa¸ è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: ¸ è¶…æ—¶ï¼Œå½“å‰çŠ¶æ€: Â`¯TemplateElementÍ>Í>a  ÃÂÀV§LiteralÍ>9Í><Ìd£100Â¥constP°MethodDefinitionÍ>XÍ>«ÂÂNªIdentifierÍ>XÍ>]¥delay¦methodQ²FunctionExpressionÍ>]Í>«ÀÂÂÂ‘NªIdentifierÍ>^Í>`¢msO®BlockStatementÍ>bÍ>«‘Z¯ReturnStatementÍ>mÍ>¤Y­NewExpressionÍ>tÍ>£NªIdentifierÍ>xÍ>§Promise‘Q·ArrowFunctionExpressionÍ>€Í>¢ÀÃÂÂ‘NªIdentifierÍ>€Í>‡§resolve[®CallExpressionÍ>‹Í>¢NªIdentifierÍ>‹Í>•ªsetTimeout’NªIdentifierÍ>–Í>§resolveNªIdentifierÍ>ŸÍ>¡¢msÂP°MethodDefinitionÍ>±Í@‚ÂÂNªIdentifierÍ>·Í>»¤stop¦methodQ²FunctionExpressionÍ>»Í@‚ÀÂÂÃO®BlockStatementÍ>¾Í@‚’W«IfStatementÍ>ÉÍ?K\±LogicalExpressionÍ>ÍÍ>ìX¯UnaryExpressionÍ>ÍÍ>Ü¡!ÃT°MemberExpressionÍ>ÎÍ>ÜU®ThisExpressionÍ>ÎÍ>ÒNªIdentifierÍ>ÓÍ>Ü©isPlayingÂÂ¢||X¯UnaryExpressionÍ>àÍ>ì¡!ÃT°MemberExpressionÍ>áÍ>ìU®ThisExpressionÍ>áÍ>åNªIdentifierÍ>æÍ>ì¦playerÂÂO®BlockStatementÍ>îÍ?K’R³ExpressionStatementÍ>ıÍ?+[®CallExpressionÍ>ıÍ?*T°MemberExpressionÍ>ıÍ?NªIdentifierÍ>ıÍ?¥hilogNªIdentifierÍ?Í?¤infoÂÂ“V§LiteralÍ?Í? ¦0x0000V§LiteralÍ?Í?¬AudioManager®'AudioManager'V§LiteralÍ? Í?)µå½“å‰æ²¡æœ‰åœ¨æ’­æ”¾·'å½“å‰æ²¡æœ‰åœ¨æ’­æ”¾'ÂZ¯ReturnStatementÍ?9Í?@ÀÀ]¬TryStatementÍ?UÍ@{O®BlockStatementÍ?YÍ?Æ’R³ExpressionStatementÍ?hÍ?Z¯AwaitExpressionÍ?hÍ?€[®CallExpressionÍ?nÍ?€T°MemberExpressionÍ?nÍ?~T°MemberExpressionÍ?nÍ?yU®ThisExpressionÍ?nÍ?rNªIdentifierÍ?sÍ?y¦playerÂÂNªIdentifierÍ?zÍ?~¤stopÂÂÂR³ExpressionStatementÍ?Í?»[®CallExpressionÍ?Í?ºT°MemberExpressionÍ?Í?™NªIdentifierÍ?Í?”¥hilogNªIdentifierÍ?•Í?™¤infoÂÂ“V§LiteralÍ?šÍ?  ¦0x0000V§LiteralÍ?¢Í?°¬AudioManager®'AudioManager'V§LiteralÍ?²Í?¹¯æ’­æ”¾å·²åœæ­¢±'æ’­æ”¾å·²åœæ­¢'Â^«CatchClauseÍ?ĞÍ@{NªIdentifierÍ?×Í?Ü¥errorO®BlockStatementÍ?ŞÍ@{“b³VariableDeclarationÍ?íÍ?ı‘c²VariableDeclaratorÍ?óÍ?üNªIdentifierÍ?óÍ?ô¡eNªIdentifierÍ?÷Í?ü¥error¥constR³ExpressionStatementÍ@Í@G[®CallExpressionÍ@Í@FT°MemberExpressionÍ@Í@NªIdentifierÍ@Í@¥hilogNªIdentifierÍ@Í@¥errorÂÂ“V§LiteralÍ@Í@ ¦0x0000V§LiteralÍ@Í@-¬AudioManager®'AudioManager'_¯TemplateLiteralÍ@/Í@E‘T°MemberExpressionÍ@:Í@CNªIdentifierÍ@:Í@;¡eNªIdentifierÍ@<Í@C§messageÂÂ’`¯TemplateElementÍ@0Í@8a´åœæ­¢æ’­æ”¾å¤±è´¥: ´åœæ­¢æ’­æ”¾å¤±è´¥: Â`¯TemplateElementÍ@DÍ@Da  ÃÂZ®ThrowStatementÍ@UÍ@pY­NewExpressionÍ@[Í@oNªIdentifierÍ@_Í@d¥Error‘T°MemberExpressionÍ@eÍ@nNªIdentifierÍ@eÍ@f¡eNªIdentifierÍ@gÍ@n§messageÂÂÀP°MethodDefinitionÍ@ˆÍB
+ÂÂNªIdentifierÍ@ˆÍ@”¬setCallbacks¦methodQ²FunctionExpressionÍ@”ÍB
+ÀÂÂÂ‘NªIdentifierÍ@•Í@©callbacksO®BlockStatementÍ@ ÍB
+–R³ExpressionStatementÍ@«Í@àS´AssignmentExpressionÍ@«Í@ß¡=T°MemberExpressionÍ@«Í@ÅU®ThisExpressionÍ@«Í@¯NªIdentifierÍ@°Í@ÅµonRecordStartCallbackÂÂT°MemberExpressionÍ@ÈÍ@ßNªIdentifierÍ@ÈÍ@Ñ©callbacksNªIdentifierÍ@ÒÍ@ß­onRecordStartÂÂR³ExpressionStatementÍ@êÍAS´AssignmentExpressionÍ@êÍA¡=T°MemberExpressionÍ@êÍAU®ThisExpressionÍ@êÍ@îNªIdentifierÍ@ïÍA´onRecordStopCallbackÂÂT°MemberExpressionÍAÍANªIdentifierÍAÍA©callbacksNªIdentifierÍAÍA¬onRecordStopÂÂR³ExpressionStatementÍA'ÍAXS´AssignmentExpressionÍA'ÍAW¡=T°MemberExpressionÍA'ÍA?U®ThisExpressionÍA'ÍA+NªIdentifierÍA,ÍA?³onPlayStartCallbackÂÂT°MemberExpressionÍABÍAWNªIdentifierÍABÍAK©callbacksNªIdentifierÍALÍAW«onPlayStartÂÂR³ExpressionStatementÍAbÍA™S´AssignmentExpressionÍAbÍA˜¡=T°MemberExpressionÍAbÍA}U®ThisExpressionÍAbÍAfNªIdentifierÍAgÍA}¶onPlayCompleteCallbackÂÂT°MemberExpressionÍA€ÍA˜NªIdentifierÍA€ÍA‰©callbacksNªIdentifierÍAŠÍA˜®onPlayCompleteÂÂR³ExpressionStatementÍA£ÍAÌS´AssignmentExpressionÍA£ÍAË¡=T°MemberExpressionÍA£ÍA·U®ThisExpressionÍA£ÍA§NªIdentifierÍA¨ÍA·¯onErrorCallbackÂÂT°MemberExpressionÍAºÍAËNªIdentifierÍAºÍAÃ©callbacksNªIdentifierÍAÄÍAË§onErrorÂÂR³ExpressionStatementÍAÖÍBS´AssignmentExpressionÍAÖÍB¡=T°MemberExpressionÍAÖÍAìU®ThisExpressionÍAÖÍAÚNªIdentifierÍAÛÍAì±onPcmDataCallbackÂÂT°MemberExpressionÍAïÍBNªIdentifierÍAïÍAø©callbacksNªIdentifierÍAùÍB©onPcmDataÂÂP°MethodDefinitionÍB%ÍD–ÂÂNªIdentifierÍB+ÍB2§cleanup¦methodQ²FunctionExpressionÍB2ÍD–ÀÂÂÃO®BlockStatementÍB5ÍD–‘]¬TryStatementÍB@ÍDO®BlockStatementÍBDÍD/”W«IfStatementÍBSÍBÜT°MemberExpressionÍBWÍBiU®ThisExpressionÍBWÍB[NªIdentifierÍB\ÍBi­audioCapturerÂÂO®BlockStatementÍBkÍBÜ’R³ExpressionStatementÍB~ÍB¡Z¯AwaitExpressionÍB~ÍB [®CallExpressionÍB„ÍB T°MemberExpressionÍB„ÍBT°MemberExpressionÍB„ÍB–U®ThisExpressionÍB„ÍBˆNªIdentifierÍB‰ÍB–­audioCapturerÂÂNªIdentifierÍB—ÍB§releaseÂÂÂR³ExpressionStatementÍB³ÍBÍS´AssignmentExpressionÍB³ÍBÌ¡=T°MemberExpressionÍB³ÍBÅU®ThisExpressionÍB³ÍB·NªIdentifierÍB¸ÍBÅ­audioCapturerÂÂV§LiteralÍBÈÍBÌÀ¤nullÀW«IfStatementÍBêÍCdT°MemberExpressionÍBîÍBûU®ThisExpressionÍBîÍBòNªIdentifierÍBóÍBû¨recorderÂÂO®BlockStatementÍBıÍCd’R³ExpressionStatementÍCÍC.Z¯AwaitExpressionÍCÍC-[®CallExpressionÍCÍC-T°MemberExpressionÍCÍC+T°MemberExpressionÍCÍC#U®ThisExpressionÍCÍCNªIdentifierÍCÍC#¨recorderÂÂNªIdentifierÍC$ÍC+§releaseÂÂÂR³ExpressionStatementÍC@ÍCUS´AssignmentExpressionÍC@ÍCT¡=T°MemberExpressionÍC@ÍCMU®ThisExpressionÍC@ÍCDNªIdentifierÍCEÍCM¨recorderÂÂV§LiteralÍCPÍCTÀ¤nullÀW«IfStatementÍCrÍCæT°MemberExpressionÍCvÍCU®ThisExpressionÍCvÍCzNªIdentifierÍC{ÍC¦playerÂÂO®BlockStatementÍCƒÍCæ’R³ExpressionStatementÍC–ÍC²Z¯AwaitExpressionÍC–ÍC±[®CallExpressionÍCœÍC±T°MemberExpressionÍCœÍC¯T°MemberExpressionÍCœÍC§U®ThisExpressionÍCœÍC NªIdentifierÍC¡ÍC§¦playerÂÂNªIdentifierÍC¨ÍC¯§releaseÂÂÂR³ExpressionStatementÍCÄÍC×S´AssignmentExpressionÍCÄÍCÖ¡=T°MemberExpressionÍCÄÍCÏU®ThisExpressionÍCÄÍCÈNªIdentifierÍCÉÍCÏ¦playerÂÂV§LiteralÍCÒÍCÖÀ¤nullÀR³ExpressionStatementÍCôÍD$[®CallExpressionÍCôÍD#T°MemberExpressionÍCôÍCşNªIdentifierÍCôÍCù¥hilogNªIdentifierÍCúÍCş¤infoÂÂ“V§LiteralÍCÿÍD ¦0x0000V§LiteralÍDÍD¬AudioManager®'AudioManager'V§LiteralÍDÍD"»æ‰€æœ‰éŸ³é¢‘èµ„æºå·²æ¸…ç†½'æ‰€æœ‰éŸ³é¢‘èµ„æºå·²æ¸…ç†'Â^«CatchClauseÍD9ÍDNªIdentifierÍD@ÍDE¥errorO®BlockStatementÍDGÍD‘R³ExpressionStatementÍDVÍD„[®CallExpressionÍDVÍDƒT°MemberExpressionÍDVÍDaNªIdentifierÍDVÍD[¥hilogNªIdentifierÍD\ÍDa¥errorÂÂ“V§LiteralÍDbÍDh ¦0x0000V§LiteralÍDjÍDx¬AudioManager®'AudioManager'V§LiteralÍDzÍD‚²æ¸…ç†èµ„æºå¤±è´¥´'æ¸…ç†èµ„æºå¤±è´¥'ÂÀÀ”Ôri•¤type¥start£endªspecifiers¦source±ImportDeclaration +‘Ôrj”¤type¥start£end¥local¶ImportDefaultSpecifierNªIdentifier¥mediaV§Literal*¶@ohos.multimedia.media¸'@ohos.multimedia.media'i±ImportDeclaration-ÌX‘j¶ImportDefaultSpecifier49NªIdentifier49¥audioV§Literal?ÌW¶@ohos.multimedia.audio¸'@ohos.multimedia.audio'i±ImportDeclarationÌZÌy‘j¶ImportDefaultSpecifierÌaÌcNªIdentifierÌaÌc¢fsV§LiteralÌiÌx­@ohos.file.fs¯'@ohos.file.fs'i±ImportDeclarationÌ{Ì›‘j¶ImportDefaultSpecifierÌ‚Ì‡NªIdentifierÌ‚Ì‡¥hilogV§LiteralÌÌš«@ohos.hilog­'@ohos.hilog'

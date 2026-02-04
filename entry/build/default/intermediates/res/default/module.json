@@ -1,0 +1,92 @@
+{
+	"app":	{
+		"bundleName":	"com.example.voicediary",
+		"vendor":	"example",
+		"versionCode":	1000000,
+		"versionName":	"1.0.0",
+		"icon":	"$media:layered_image",
+		"label":	"$string:app_name",
+		"apiReleaseType":	"Release",
+		"compileSdkVersion":	"6.0.0.47",
+		"targetAPIVersion":	50101019,
+		"minAPIVersion":	50101019,
+		"compileSdkType":	"HarmonyOS",
+		"targetMinorAPIVersion":	0,
+		"targetPatchAPIVersion":	0,
+		"appEnvironments":	[],
+		"bundleType":	"app",
+		"buildMode":	"debug",
+		"debug":	true,
+		"iconId":	16777219,
+		"labelId":	16777216
+	},
+	"module":	{
+		"name":	"entry",
+		"type":	"entry",
+		"description":	"$string:module_desc",
+		"mainElement":	"EntryAbility",
+		"deviceTypes":	["phone", "tablet"],
+		"deliveryWithInstall":	true,
+		"installationFree":	false,
+		"pages":	"$profile:main_pages",
+		"abilities":	[{
+				"name":	"EntryAbility",
+				"srcEntry":	"./ets/entryability/EntryAbility.ets",
+				"description":	"$string:EntryAbility_desc",
+				"icon":	"$media:icon",
+				"label":	"$string:EntryAbility_label",
+				"startWindowIcon":	"$media:icon",
+				"startWindowBackground":	"$color:start_window_background",
+				"exported":	true,
+				"launchType":	"singleton",
+				"visible":	true,
+				"skills":	[{
+						"entities":	["entity.system.home"],
+						"actions":	["action.system.home"]
+					}],
+				"descriptionId":	16777220,
+				"iconId":	16777270,
+				"labelId":	16777221,
+				"startWindowIconId":	16777270,
+				"startWindowBackgroundId":	16777265
+			}],
+		"requestPermissions":	[{
+				"name":	"ohos.permission.MICROPHONE",
+				"reason":	"$string:microphone_reason",
+				"usedScene":	{
+					"abilities":	["EntryAbility"],
+					"when":	"inuse"
+				},
+				"reasonId":	16777229
+			}, {
+				"name":	"ohos.permission.WRITE_MEDIA",
+				"reason":	"$string:write_media_reason",
+				"usedScene":	{
+					"abilities":	["EntryAbility"],
+					"when":	"inuse"
+				},
+				"reasonId":	16777256
+			}, {
+				"name":	"ohos.permission.READ_MEDIA",
+				"reason":	"$string:read_media_reason",
+				"usedScene":	{
+					"abilities":	["EntryAbility"],
+					"when":	"inuse"
+				},
+				"reasonId":	16777239
+			}, {
+				"name":	"ohos.permission.INTERNET",
+				"reason":	"$string:internet_reason",
+				"usedScene":	{
+					"abilities":	["EntryAbility"],
+					"when":	"inuse"
+				},
+				"reasonId":	16777228
+			}],
+		"dependencies":	[],
+		"packageName":	"entry",
+		"virtualMachine":	"ark13.0.1.0",
+		"compileMode":	"esmodule",
+		"descriptionId":	16777230
+	}
+}

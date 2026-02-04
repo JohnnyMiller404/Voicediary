@@ -1,0 +1,46 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "语音日记应用模块" },
+    { "name": "EntryAbility_desc", "value": "基于HarmonyOS的语音日记应用" },
+    { "name": "EntryAbility_label", "value": "语音日记" },
+    { "name": "microphone_reason", "value": "需要使用麦克风进行语音录制" },
+    { "name": "write_media_reason", "value": "需要保存录音文件到本地存储" },
+    { "name": "read_media_reason", "value": "需要读取本地录音文件进行播放" },
+    { "name": "internet_reason", "value": "应用需要联网以进行语音识别" },
+
+    { "name": "back", "value": "返回" },
+    { "name": "save", "value": "保存" },
+    { "name": "diary_detail", "value": "日记详情" },
+    { "name": "new_diary", "value": "新建日记" },
+    { "name": "recording", "value": "正在录音..." },
+    { "name": "press_to_record", "value": "按住按钮开始录音" },
+    { "name": "recognition_result", "value": "识别结果" },
+    { "name": "play_audio", "value": "播放录音" },
+    { "name": "stop_play", "value": "停止播放" },
+    { "name": "delete_button", "value": "删除" },
+
+    { "name": "recording_started", "value": "开始录音" },
+    { "name": "recording_stopped", "value": "录音已停止" },
+    { "name": "recognizing", "value": "正在识别..." },
+    { "name": "recognize_success", "value": "识别完成" },
+    { "name": "recognize_failed", "value": "识别失败，请重试" },
+    { "name": "audio_init_failed", "value": "音频初始化失败" },
+    { "name": "record_failed", "value": "录音失败" },
+    { "name": "stop_record_failed", "value": "停止录音失败" },
+    { "name": "no_audio", "value": "没有可播放的录音" },
+    { "name": "play_failed", "value": "播放失败" },
+    { "name": "record_first", "value": "请先录音并识别" },
+    { "name": "save_success", "value": "保存成功" },
+    { "name": "save_failed", "value": "保存失败" },
+    { "name": "delete_success", "value": "删除成功" },
+    { "name": "delete_failed", "value": "删除失败" },
+
+    { "name": "voice_diary_title", "value": "语音日记" },
+    { "name": "no_diary_yet", "value": "还没有日记" },
+    { "name": "start_recording_tip", "value": "点击下方按钮开始记录" },
+    { "name": "new_diary_button", "value": "新建日记" },
+    { "name": "no_content", "value": "暂无内容" }
+
+  ]
+}
+
